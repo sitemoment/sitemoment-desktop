@@ -1,6 +1,6 @@
 import { CancelError } from "@wailsio/runtime";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, errText, onEvent } from "./api";
+import { api, errText, isNetworkError, onEvent } from "./api";
 import { AddSite } from "./components/AddSite";
 import { SitesPanel } from "./components/SitesPanel";
 import { StatusBar } from "./components/StatusBar";
@@ -32,7 +32,14 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    api.account().then(setAccount).catch((e) => setError(errText(e)));
+    // Local-first: the app works offline, so a network failure fetching the
+    // account (the backend being unreachable) shouldn't show the red error
+    // banner. Just keep whatever account state we had (unknown, on first
+    // run) and show nothing.
+    api.account().then(setAccount).catch((e) => {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (!isNetworkError(msg)) setError(errText(e));
+    });
     reloadSites().catch((e) => setError(errText(e)));
     api.info().then(setInfo);
     api.syncStatuses().then((list) => setStatuses(Object.fromEntries(list.map((s) => [s.siteId, s]))));
