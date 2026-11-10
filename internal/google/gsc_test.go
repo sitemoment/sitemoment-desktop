@@ -2,12 +2,19 @@
 package google
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 )
+
+// noSleep skips the real backoff delay in tests that intentionally exhaust
+// retries or just don't care about timing.
+func noSleep(context.Context, time.Duration) error { return nil }
 
 func TestProperties(t *testing.T) {
 	g := &GSC{HTTP: client(func(r *http.Request) (*http.Response, error) {
@@ -71,9 +78,74 @@ func TestQueryAggregationTypeByPage(t *testing.T) {
 
 func TestQueryErrors(t *testing.T) {
 	for code, want := range map[int]error{401: ErrReauth, 429: ErrRateLimited} {
-		g := &GSC{HTTP: client(func(*http.Request) (*http.Response, error) { return reply(code, `{"error":{"message":"x"}}`) })}
+		// sleep: noSleep keeps the 429 case (which now retries) fast.
+		g := &GSC{sleep: noSleep, HTTP: client(func(*http.Request) (*http.Response, error) { return reply(code, `{"error":{"message":"x"}}`) })}
 		if _, err := g.Query(ctx, "tok", "https://a.example.com/", Query{Start: "2026-11-01", End: "2026-11-01", Dimensions: []string{"date"}}); !errors.Is(err, want) {
 			t.Errorf("HTTP %d: %v, want %v", code, err, want)
 		}
+	}
+}
+
+func TestQueryRetries429ThenSucceeds(t *testing.T) {
+	var calls int
+	g := &GSC{sleep: noSleep, HTTP: client(func(r *http.Request) (*http.Response, error) {
+		calls++
+		if calls <= 2 {
+			return reply(429, `{"error":{"message":"slow down"}}`)
+		}
+		return reply(200, `{"rows":[{"keys":["2026-11-01"],"clicks":1,"impressions":2,"ctr":0.5,"position":1}]}`)
+	})}
+	rows, err := g.Query(ctx, "tok", "https://a.example.com/", Query{Start: "2026-11-01", End: "2026-11-01", Dimensions: []string{"date"}})
+	if err != nil || len(rows) != 1 || calls != 3 {
+		t.Fatalf("Query = %+v, %v, calls=%d, want 1 row, nil err, 3 calls", rows, err, calls)
+	}
+}
+
+func TestQueryRetries5xxExhausted(t *testing.T) {
+	var calls int
+	g := &GSC{sleep: noSleep, HTTP: client(func(*http.Request) (*http.Response, error) {
+		calls++
+		return reply(503, `{"error":{"message":"down"}}`)
+	})}
+	_, err := g.Query(ctx, "tok", "https://a.example.com/", Query{Start: "2026-11-01", End: "2026-11-01", Dimensions: []string{"date"}})
+	if calls != 4 {
+		t.Fatalf("calls = %d, want 4", calls)
+	}
+	if !errors.Is(err, ErrRateLimited) && !errors.Is(err, ErrServerError) {
+		t.Fatalf("err = %v, want ErrRateLimited or ErrServerError", err)
+	}
+}
+
+func TestQueryHonorsRetryAfter(t *testing.T) {
+	var slept []time.Duration
+	var calls int
+	g := &GSC{
+		sleep: func(_ context.Context, d time.Duration) error { slept = append(slept, d); return nil },
+		HTTP: client(func(*http.Request) (*http.Response, error) {
+			calls++
+			if calls == 1 {
+				return &http.Response{StatusCode: 429, Body: io.NopCloser(strings.NewReader(`{}`)),
+					Header: http.Header{"Retry-After": {"5"}}}, nil
+			}
+			return reply(200, `{"rows":[]}`)
+		}),
+	}
+	if _, err := g.Query(ctx, "tok", "https://a.example.com/", Query{Start: "2026-11-01", End: "2026-11-01", Dimensions: []string{"date"}}); err != nil {
+		t.Fatalf("Query = %v", err)
+	}
+	if len(slept) != 1 || slept[0] != 5*time.Second {
+		t.Fatalf("slept = %v, want [5s]", slept)
+	}
+}
+
+func TestQueryCtxCancelDuringBackoff(t *testing.T) {
+	g := &GSC{
+		sleep: func(c context.Context, _ time.Duration) error { return c.Err() },
+		HTTP:  client(func(*http.Request) (*http.Response, error) { return reply(429, `{}`) }),
+	}
+	cctx, cancel := context.WithCancel(ctx)
+	cancel()
+	if _, err := g.Query(cctx, "tok", "https://a.example.com/", Query{Start: "2026-11-01", End: "2026-11-01", Dimensions: []string{"date"}}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
 	}
 }
