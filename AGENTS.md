@@ -5,4 +5,4 @@
 - 密钥（Google refresh token、SiteMoment refresh token、模型 key）只放 `internal/secret`，不写数据库、不写日志。
 - 界面风格以 `design/mockups/2-console.html` 为准；颜色用 `frontend/src/theme.css` 的变量。
 - 测试数据不能写进用户的数据目录：测试一律用 `t.TempDir()`；手工运行用 `SITEMOMENT_DATA_DIR=/tmp/...`。
-- `main.go` 嵌入 `frontend/dist`，所以 `go build ./...`、`go vet ./...` 之前先 `cd frontend && npm run build`，并 `wails3 generate bindings`。
+- `main.go` 嵌入 `frontend/dist`，所以 `go build ./...`、`go vet ./...` 之前先 `cd frontend && npm run build`，并 `wails3 generate bindings -ts -i`（和 `build/Taskfile.yml` 一致；也可以 `cd frontend && npm run bindings`）。裸的 `wails3 generate bindings` 只生成带 JSDoc 的 `.js`，没有 `.d.ts`，`api.ts` 对着它类型检查不严。

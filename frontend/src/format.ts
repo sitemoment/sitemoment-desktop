@@ -4,14 +4,22 @@ export const fmtInt = (n: number) => Math.round(n).toLocaleString("en-US");
 
 export function fmtCompact(n: number): string {
   if (n >= 1e6) return (n / 1e6).toFixed(1) + "M";
-  if (n >= 1e4) return (n / 1e3).toFixed(1) + "K";
+  if (n >= 1e4) {
+    // Round at the same precision as the displayed value first: a number
+    // like 999999 rounds to "1000.0K", which belongs in the next unit up.
+    const k = Number((n / 1e3).toFixed(1));
+    if (k >= 1000) return (n / 1e6).toFixed(1) + "M";
+    return k.toFixed(1) + "K";
+  }
   return fmtInt(n);
 }
 
 export const fmtPct = (ratio: number) => (ratio * 100).toFixed(2) + "%";
 
 export function fmtBytes(b: number): string {
-  return b >= 1 << 30 ? (b / (1 << 30)).toFixed(1) + " GB" : (b / (1 << 20)).toFixed(1) + " MB";
+  if (b >= 1 << 30) return (b / (1 << 30)).toFixed(1) + " GB";
+  if (b >= 1 << 20) return (b / (1 << 20)).toFixed(1) + " MB";
+  return (b / (1 << 10)).toFixed(1) + " KB";
 }
 
 export function fmtTime(unix: number): string {

@@ -76,8 +76,8 @@ export default function App() {
       <div className="titlebar"><span className="cmd">SiteMoment · {site?.host ?? "本地 SEO 运营"}</span></div>
       <div className="body">
         <nav className="rail">
-          <button className={page === "overview" ? "on" : ""} title="概览" onClick={() => setPage("overview")}>◧</button>
-          <button className={"bottom" + (page === "settings" ? " on" : "")} title="设置" onClick={() => setPage("settings")}>⚙</button>
+          <button className={page === "overview" ? "on" : ""} title="概览" aria-label="概览" onClick={() => setPage("overview")}>◧</button>
+          <button className={"bottom" + (page === "settings" ? " on" : "")} title="设置" aria-label="设置" onClick={() => setPage("settings")}>⚙</button>
         </nav>
         <SitesPanel sites={sites} selected={siteId} statuses={statuses} account={account} loggingIn={loggingIn}
           onSelect={(id) => { setSiteId(id); setPage("overview"); }} onAdd={() => setAdding(true)} onLogin={login} />

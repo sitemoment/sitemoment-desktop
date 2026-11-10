@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { change, fmtCompact, fmtPct, guessProperty, niceScale, posChange } from "./format";
+import { change, fmtBytes, fmtCompact, fmtPct, guessProperty, niceScale, posChange } from "./format";
 
 describe("format", () => {
   it("compacts big numbers", () => {
@@ -8,6 +8,15 @@ describe("format", () => {
     expect(fmtCompact(9876)).toBe("9,876");
     expect(fmtCompact(2_500_000)).toBe("2.5M");
     expect(fmtPct(0.02571)).toBe("2.57%");
+  });
+  it("compacts numbers near a unit boundary without overflowing the unit", () => {
+    expect(fmtCompact(9_999)).toBe("9,999");
+    expect(fmtCompact(10_000)).toBe("10.0K");
+    expect(fmtCompact(999_949)).toBe("999.9K");
+    expect(fmtCompact(999_999)).toBe("1.0M");
+  });
+  it("formats byte counts below a megabyte as KB", () => {
+    expect(fmtBytes(524288)).toBe("512.0 KB");
   });
   it("compares periods", () => {
     expect(change(120, 100)).toEqual({ text: "+20.0%", up: true });
