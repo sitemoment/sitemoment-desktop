@@ -23,11 +23,13 @@ export function BindGSC({ site, onBound }: { site: Site; onBound: () => void }) 
   }, []);
   useEffect(() => {
     if (!account) return;
+    let live = true;
     setProps([]);
     setErr("");
     api.properties(account)
-      .then((p) => { setProps(p); setProp(guessProperty(p, site.host)); })
-      .catch((e) => setErr(errText(e)));
+      .then((p) => { if (live) { setProps(p); setProp(guessProperty(p, site.host)); } })
+      .catch((e) => { if (live) setErr(errText(e)); });
+    return () => { live = false; };
   }, [account, site.host]);
 
   const connect = () => {

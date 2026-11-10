@@ -31,6 +31,20 @@ export function ClicksChart({ cur, prev }: { cur: DayPoint[]; prev: DayPoint[] }
     setHover(Math.max(0, Math.min(n - 1, i)));
   };
   const h = hover;
+  // End labels can land on top of each other when both periods end at (or
+  // near) the same value; push them apart around their midpoint instead.
+  const yEndCur = y(cur[n - 1].clicks);
+  const yEndPrev = prev[n - 1] ? y(prev[n - 1].clicks) : null;
+  let labelCurY = yEndCur;
+  let labelPrevY = yEndPrev;
+  if (labelPrevY !== null && Math.abs(yEndCur - labelPrevY) < 12) {
+    const mid = (yEndCur + labelPrevY) / 2;
+    labelCurY = mid - 6;
+    labelPrevY = mid + 6;
+  }
+  // A single-point series has no hover target to reveal it, so always show
+  // its dot(s); otherwise dots only appear on hover.
+  const dotIndex = h !== null ? h : n === 1 ? 0 : null;
   return (
     <>
       <div className="chart-plot" ref={ref}>
@@ -44,13 +58,13 @@ export function ClicksChart({ cur, prev }: { cur: DayPoint[]; prev: DayPoint[] }
           {labels.map((i) => <text key={i} className="axis" x={x(i)} y={H - 6} textAnchor="middle">{cur[i].day.slice(5)}</text>)}
           {prev.length > 0 && <path className="ln ln-2" d={path(prev.slice(0, n))} />}
           <path className="ln ln-1" d={path(cur)} />
-          <text className="dl" x={x(n - 1) + 8} y={y(cur[n - 1].clicks) + 4}>本期</text>
-          {prev[n - 1] && <text className="dl" x={x(n - 1) + 8} y={y(prev[n - 1].clicks) + 4}>上期</text>}
-          {h !== null && (
+          <text className="dl" x={x(n - 1) + 8} y={labelCurY + 4}>本期</text>
+          {prev[n - 1] && <text className="dl" x={x(n - 1) + 8} y={labelPrevY! + 4}>上期</text>}
+          {dotIndex !== null && (
             <>
-              <line className="xh" x1={x(h)} x2={x(h)} y1={M.t} y2={H - M.b} />
-              {prev[h] && <circle className="dot" r={4} cx={x(h)} cy={y(prev[h].clicks)} fill="var(--series-2)" />}
-              <circle className="dot" r={4} cx={x(h)} cy={y(cur[h].clicks)} fill="var(--series-1)" />
+              {h !== null && <line className="xh" x1={x(h)} x2={x(h)} y1={M.t} y2={H - M.b} />}
+              {prev[dotIndex] && <circle className="dot" r={4} cx={x(dotIndex)} cy={y(prev[dotIndex].clicks)} fill="var(--series-2)" />}
+              <circle className="dot" r={4} cx={x(dotIndex)} cy={y(cur[dotIndex].clicks)} fill="var(--series-1)" />
             </>
           )}
           <rect x={M.l} y={0} width={Math.max(0, w - M.l - M.r)} height={H} fill="transparent" onMouseMove={move} onMouseLeave={() => setHover(null)} />
