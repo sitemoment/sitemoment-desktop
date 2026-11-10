@@ -22,6 +22,15 @@ type SyncStatus struct {
 	At       int64  `json:"at"`
 }
 
+// defaultConcurrency caps how many sites sync at once: GSC backfills are
+// slow and bursty, and running every site at once makes rate limiting (and
+// the resulting retries) much more likely.
+const defaultConcurrency = 2
+
+// defaultRetryAfterRateLimit is how long SyncService waits before
+// automatically retrying a site whose run failed with google.ErrRateLimited.
+const defaultRetryAfterRateLimit = 5 * time.Minute
+
 // SyncService runs Search Console syncs in the background.
 type SyncService struct {
 	Syncer *gscsync.Syncer
@@ -33,9 +42,17 @@ type SyncService struct {
 	// nothing exported here hands it back out. Defaults to
 	// context.Background() when nil.
 	Ctx context.Context
+	// Concurrency caps how many sites sync at once; a run beyond the cap
+	// waits for a slot (its status stays "running" meanwhile). 0: defaultConcurrency.
+	Concurrency int
+	// RetryAfterRateLimit is how long to wait before automatically retrying
+	// a site that failed with google.ErrRateLimited. 0: defaultRetryAfterRateLimit.
+	RetryAfterRateLimit time.Duration
 
-	mu     sync.Mutex
-	status map[int64]SyncStatus
+	mu       sync.Mutex
+	status   map[int64]SyncStatus
+	sem      chan struct{}
+	retrying map[int64]bool
 }
 
 func (s *SyncService) context() context.Context {
@@ -43,6 +60,20 @@ func (s *SyncService) context() context.Context {
 		return s.Ctx
 	}
 	return context.Background()
+}
+
+// semaphore lazily creates the concurrency-limiting channel.
+func (s *SyncService) semaphore() chan struct{} {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.sem == nil {
+		n := s.Concurrency
+		if n <= 0 {
+			n = defaultConcurrency
+		}
+		s.sem = make(chan struct{}, n)
+	}
+	return s.sem
 }
 
 func (s *SyncService) setStatus(st SyncStatus) {
@@ -91,6 +122,14 @@ func (s *SyncService) Statuses() []SyncStatus {
 }
 
 func (s *SyncService) run(ctx context.Context, siteID int64) {
+	sem := s.semaphore()
+	select {
+	case sem <- struct{}{}:
+	case <-ctx.Done():
+		return
+	}
+	defer func() { <-sem }()
+
 	total := 0
 	site, err := s.Store.Site(ctx, siteID)
 	for err == nil {
@@ -106,6 +145,46 @@ func (s *SyncService) run(ctx context.Context, siteID int64) {
 		st.State, st.Error = "failed", syncMessage(err)
 	}
 	s.setStatus(st)
+
+	if err != nil && errors.Is(err, google.ErrRateLimited) {
+		s.scheduleRetry(ctx, siteID)
+	}
+}
+
+// scheduleRetry arranges exactly one automatic retry of siteID after
+// RetryAfterRateLimit, unless one is already pending for that site. The
+// retry respects ctx: if the service is shutting down, it is dropped.
+func (s *SyncService) scheduleRetry(ctx context.Context, siteID int64) {
+	s.mu.Lock()
+	if s.retrying == nil {
+		s.retrying = map[int64]bool{}
+	}
+	if s.retrying[siteID] {
+		s.mu.Unlock()
+		return
+	}
+	s.retrying[siteID] = true
+	s.mu.Unlock()
+
+	delay := s.RetryAfterRateLimit
+	if delay <= 0 {
+		delay = defaultRetryAfterRateLimit
+	}
+	go func() {
+		t := time.NewTimer(delay)
+		defer t.Stop()
+		select {
+		case <-ctx.Done():
+			s.mu.Lock()
+			delete(s.retrying, siteID)
+			s.mu.Unlock()
+		case <-t.C:
+			s.mu.Lock()
+			delete(s.retrying, siteID)
+			s.mu.Unlock()
+			s.SyncNow(siteID)
+		}
+	}()
 }
 
 func syncMessage(err error) string {
