@@ -16,7 +16,7 @@ export default function App() {
   const [siteId, setSiteId] = useState<number | null>(null);
   const [page, setPage] = useState<Page>("overview");
   const [statuses, setStatuses] = useState<Record<number, SyncStatus>>({});
-  const [progress, setProgress] = useState<SyncProgress | null>(null);
+  const [progress, setProgress] = useState<Record<number, SyncProgress>>({});
   const [info, setInfo] = useState<Info | null>(null);
   const [adding, setAdding] = useState(false);
   const [error, setError] = useState("");
@@ -46,11 +46,17 @@ export default function App() {
     const offStatus = onEvent<SyncStatus>("sync:status", (s) => {
       setStatuses((m) => ({ ...m, [s.siteId]: s }));
       if (s.state !== "running") {
-        setProgress(null);
+        setProgress((m) => {
+          if (!(s.siteId in m)) return m;
+          const { [s.siteId]: _removed, ...rest } = m;
+          return rest;
+        });
         api.info().then(setInfo);
       }
     });
-    const offProgress = onEvent<SyncProgress>("sync:progress", setProgress);
+    const offProgress = onEvent<SyncProgress>("sync:progress", (p) => {
+      setProgress((m) => ({ ...m, [p.siteId]: p }));
+    });
     return () => {
       offStatus();
       offProgress();
@@ -103,7 +109,7 @@ export default function App() {
           )}
         </main>
       </div>
-      <StatusBar status={site ? statuses[site.id] : undefined} progress={progress} info={info} siteId={site?.id} />
+      <StatusBar status={site ? statuses[site.id] : undefined} progress={site ? progress[site.id] ?? null : null} info={info} siteId={site?.id} />
       {adding && (
         <AddSite onCancel={() => setAdding(false)} onDone={async (s) => { setAdding(false); await reloadSites(); setSiteId(s.id); setPage("overview"); }} />
       )}
