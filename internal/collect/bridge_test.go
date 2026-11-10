@@ -54,6 +54,7 @@ func TestVerifyRejects(t *testing.T) {
 		{"http", good, "http://www.google.com/", ErrBadOrigin},
 		{"app page", good, "wails://wails/boot.html", ErrBadOrigin},
 		{"empty", good, "", ErrBadOrigin},
+		{"port", good, "https://www.google.com:9999/", ErrBadOrigin},
 	}
 	for _, c := range cases {
 		if err := Verify(run, c.m, c.origin); !errors.Is(err, c.want) {

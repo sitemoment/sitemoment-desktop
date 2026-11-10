@@ -80,7 +80,7 @@ func Verify(run Run, m Message, origin string) error {
 		return ErrBadRun
 	}
 	u, err := url.Parse(origin)
-	if err != nil || u.Scheme != "https" {
+	if err != nil || u.Scheme != "https" || u.Port() != "" {
 		return ErrBadOrigin
 	}
 	host := strings.ToLower(u.Hostname())
