@@ -1,0 +1,14 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>SiteMoment collector</title>
+<p>采集器准备中…</p>
+<script>
+  // Wails queues ExecJS until the window reports runtime ready; external
+  // pages never do, so this local page does it once before we navigate away.
+  var msg = "wails:runtime:ready";
+  if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.external) {
+    window.webkit.messageHandlers.external.postMessage(msg);
+  } else if (window.chrome && window.chrome.webview) {
+    window.chrome.webview.postMessage(msg);
+  }
+</script>
