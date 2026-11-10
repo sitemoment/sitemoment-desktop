@@ -86,11 +86,20 @@ func (g *GSC) Query(ctx context.Context, token, property string, q Query) ([]Row
 	}
 	// QueryEscape, not PathEscape: GSC rejects an unescaped ":" in "sc-domain:".
 	endpoint := g.base() + "/sites/" + url.QueryEscape(property) + "/searchAnalytics/query"
+	// byPage when the "page" dimension is requested, else byProperty, so
+	// totals match what the Search Console UI shows for the same query.
+	aggregationType := "byProperty"
+	for _, d := range q.Dimensions {
+		if d == "page" {
+			aggregationType = "byPage"
+			break
+		}
+	}
 	var rows []Row
 	for start := 0; ; {
 		body := map[string]any{
 			"startDate": q.Start, "endDate": q.End, "dimensions": q.Dimensions, "type": "web",
-			"rowLimit": limit, "startRow": start, "dataState": "all",
+			"rowLimit": limit, "startRow": start, "dataState": "all", "aggregationType": aggregationType,
 		}
 		var page struct {
 			Rows []Row `json:"rows"`

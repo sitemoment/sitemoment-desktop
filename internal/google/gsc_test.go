@@ -36,6 +36,9 @@ func TestQueryPaginates(t *testing.T) {
 		if body["startDate"] != "2026-11-01" || body["type"] != "web" || body["rowLimit"] != float64(2) {
 			t.Errorf("body %v", body)
 		}
+		if body["aggregationType"] != "byProperty" {
+			t.Errorf("aggregationType = %v, want byProperty", body["aggregationType"])
+		}
 		start := int(body["startRow"].(float64))
 		starts = append(starts, start)
 		if start == 0 {
@@ -49,6 +52,20 @@ func TestQueryPaginates(t *testing.T) {
 	}
 	if len(starts) != 2 || starts[1] != 2 {
 		t.Fatalf("startRows = %v", starts)
+	}
+}
+
+func TestQueryAggregationTypeByPage(t *testing.T) {
+	g := &GSC{HTTP: client(func(r *http.Request) (*http.Response, error) {
+		var body map[string]any
+		json.NewDecoder(r.Body).Decode(&body)
+		if body["aggregationType"] != "byPage" {
+			t.Errorf("aggregationType = %v, want byPage", body["aggregationType"])
+		}
+		return reply(200, `{"rows":[]}`)
+	})}
+	if _, err := g.Query(ctx, "tok", "https://a.example.com/", Query{Start: "2026-11-01", End: "2026-11-01", Dimensions: []string{"date", "page"}}); err != nil {
+		t.Fatalf("Query = %v", err)
 	}
 }
 

@@ -90,7 +90,7 @@ func (o *OAuth) Exchange(ctx context.Context, code, verifier, redirectURI string
 	if err != nil {
 		return Grant{}, err
 	}
-	if !strings.Contains(tr.Scope, "webmasters") {
+	if !hasWebmastersScope(tr.Scope) {
 		return Grant{}, ErrScopes
 	}
 	if tr.RefreshToken == "" {
@@ -122,6 +122,18 @@ func (o *OAuth) AccessToken(ctx context.Context, refreshToken string) (string, e
 	}
 	o.remember(refreshToken, tr)
 	return tr.AccessToken, nil
+}
+
+// hasWebmastersScope reports whether the granted scopes include the
+// Search Console scope, checked as exact space-separated token membership
+// so a lookalike scope (e.g. "...webmasters.fake") does not pass.
+func hasWebmastersScope(scope string) bool {
+	for _, s := range strings.Fields(scope) {
+		if s == "https://www.googleapis.com/auth/webmasters.readonly" || s == "https://www.googleapis.com/auth/webmasters" {
+			return true
+		}
+	}
+	return false
 }
 
 func cacheKey(refreshToken string) string {

@@ -62,6 +62,15 @@ func TestExchangeNeedsSearchConsoleScope(t *testing.T) {
 	}
 }
 
+func TestExchangeRejectsLookalikeScope(t *testing.T) {
+	o := &OAuth{ClientID: "cid", HTTP: client(func(*http.Request) (*http.Response, error) {
+		return reply(200, `{"access_token":"at","refresh_token":"rt","expires_in":3600,"scope":"openid email https://www.googleapis.com/auth/webmasters.fake","id_token":"`+idToken("me@example.com")+`"}`)
+	})}
+	if _, err := o.Exchange(ctx, "c", "v", "http://127.0.0.1:5000/callback"); !errors.Is(err, ErrScopes) {
+		t.Fatalf("err = %v, want ErrScopes", err)
+	}
+}
+
 func TestAccessTokenRefreshAndReauth(t *testing.T) {
 	calls := 0
 	o := &OAuth{ClientID: "cid", HTTP: client(func(r *http.Request) (*http.Response, error) {
