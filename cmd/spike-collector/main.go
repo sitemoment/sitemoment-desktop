@@ -92,10 +92,16 @@ func main() {
 			case "result":
 				fmt.Printf("RESULT after %s: %s\n", took.Round(time.Millisecond), m.Data)
 				win.Hide()
+				mu.Lock()
+				run = collect.Run{}
+				mu.Unlock()
 				time.AfterFunc(*gap, next)
 			case "need_human":
 				log.Printf("captcha: showing the window; solve it and the page reloads")
 				win.Show()
+				mu.Lock()
+				run = collect.Run{}
+				mu.Unlock()
 			default:
 				log.Printf("%s: %s", m.Kind, m.Data)
 			}
