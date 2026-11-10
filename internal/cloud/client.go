@@ -13,6 +13,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 	"sync"
 	"time"
 
@@ -56,10 +57,13 @@ type tokens struct {
 	ExpiresIn    int64  `json:"expires_in"`
 }
 
+// base is c.Base without a trailing slash, so callers can set it either way.
+func (c *Client) base() string { return strings.TrimSuffix(c.Base, "/") }
+
 // LoginURL is the browser address that starts desktop sign-in.
 func (c *Client) LoginURL(redirectURI, state, challenge string) string {
 	q := url.Values{"redirect_uri": {redirectURI}, "state": {state}, "code_challenge": {challenge}, "code_challenge_method": {"S256"}}
-	return c.Base + "/auth/desktop/start?" + q.Encode()
+	return c.base() + "/auth/desktop/start?" + q.Encode()
 }
 
 // Exchange trades the code from the loopback redirect for tokens and keeps
@@ -74,9 +78,22 @@ func (c *Client) Exchange(ctx context.Context, code, verifier, redirectURI strin
 	return c.keep(t)
 }
 
-// keep stores t; the caller holds c.mu.
+// keep stores t; the caller holds c.mu. The server has already rotated the
+// refresh token by the time keep is called, so a failure to write it to the
+// keychain is retried a few times rather than silently dropping the only
+// copy of a token the server will no longer honor as "old".
 func (c *Client) keep(t tokens) error {
-	if err := c.Secrets.Set(refreshKey, t.RefreshToken); err != nil {
+	const retries = 3
+	var err error
+	for attempt := 0; attempt < retries; attempt++ {
+		if err = c.Secrets.Set(refreshKey, t.RefreshToken); err == nil {
+			break
+		}
+		if attempt < retries-1 {
+			time.Sleep(50 * time.Millisecond)
+		}
+	}
+	if err != nil {
 		return err
 	}
 	c.access = t.AccessToken
@@ -84,7 +101,10 @@ func (c *Client) keep(t tokens) error {
 	return nil
 }
 
-// AccessToken returns a valid access token, refreshing it when needed.
+// AccessToken returns a valid access token, refreshing it when needed. The
+// lock is held for the duration of any refresh HTTP request, so c.HTTP must
+// carry a request timeout (main.go uses a 60s client) or a stalled network
+// call will block every other caller of this Client indefinitely.
 func (c *Client) AccessToken(ctx context.Context) (string, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -147,7 +167,9 @@ func (c *Client) token(ctx context.Context, body map[string]string) (tokens, err
 	var t tokens
 	status, err := c.do(ctx, http.MethodPost, "/v1/desktop/token", "", body, &t)
 	if status == http.StatusBadRequest {
-		return t, errInvalidGrant
+		if ae, ok := err.(*apiError); ok && ae.Code == "invalid_grant" {
+			return t, errInvalidGrant
+		}
 	}
 	if err == nil && (t.AccessToken == "" || t.RefreshToken == "") {
 		err = errors.New("cloud: token response without tokens")
@@ -155,8 +177,25 @@ func (c *Client) token(ctx context.Context, body map[string]string) (tokens, err
 	return t, err
 }
 
+// apiError is a decoded {"error":{"code","message"}} response. Its fields
+// and Error() string come only from the server's response body, never from
+// the request we sent, so it is safe to log or return as-is: it cannot
+// contain a refresh token, access token or other request credential.
+type apiError struct {
+	Status  int
+	Code    string
+	Message string
+}
+
+func (e *apiError) Error() string {
+	if e.Code != "" {
+		return fmt.Sprintf("cloud: HTTP %d %s: %s", e.Status, e.Code, e.Message)
+	}
+	return fmt.Sprintf("cloud: HTTP %d", e.Status)
+}
+
 // do sends a JSON request and decodes a JSON response into out. It returns
-// the HTTP status alongside any error.
+// the HTTP status alongside any error; an error status yields an *apiError.
 func (c *Client) do(ctx context.Context, method, path, bearer string, body, out any) (int, error) {
 	var rd io.Reader
 	if body != nil {
@@ -166,7 +205,7 @@ func (c *Client) do(ctx context.Context, method, path, bearer string, body, out 
 		}
 		rd = bytes.NewReader(b)
 	}
-	req, err := http.NewRequestWithContext(ctx, method, c.Base+path, rd)
+	req, err := http.NewRequestWithContext(ctx, method, c.base()+path, rd)
 	if err != nil {
 		return 0, err
 	}
@@ -186,7 +225,14 @@ func (c *Client) do(ctx context.Context, method, path, bearer string, body, out 
 		return res.StatusCode, err
 	}
 	if res.StatusCode >= 400 {
-		return res.StatusCode, fmt.Errorf("cloud: %s %s: HTTP %d", method, path, res.StatusCode)
+		var e struct {
+			Error struct {
+				Code    string `json:"code"`
+				Message string `json:"message"`
+			} `json:"error"`
+		}
+		json.Unmarshal(data, &e) // best effort; apiError is still returned on decode failure
+		return res.StatusCode, &apiError{Status: res.StatusCode, Code: e.Error.Code, Message: e.Error.Message}
 	}
 	if out != nil {
 		if err := json.Unmarshal(data, out); err != nil {

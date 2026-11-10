@@ -122,3 +122,67 @@ func TestRevokedRefreshSignsOut(t *testing.T) {
 		t.Fatal("revoked refresh token not cleared")
 	}
 }
+
+// TestRefreshBadRequestKeepsToken: a 400 that is not "invalid_grant" (e.g. a
+// malformed request on our side) must not be treated as a revoked refresh
+// token: the stored refresh token must survive, and the caller must see a
+// plain error rather than ErrSignedOut.
+func TestRefreshBadRequestKeepsToken(t *testing.T) {
+	sec := secret.NewMemory()
+	sec.Set(refreshKey, "r1")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/desktop/token" {
+			t.Errorf("unexpected %s", r.URL.Path)
+			return
+		}
+		w.WriteHeader(400)
+		w.Write([]byte(`{"error":{"code":"bad_request","message":"malformed"}}`))
+	}))
+	t.Cleanup(srv.Close)
+	c := &Client{Base: srv.URL, HTTP: srv.Client(), Secrets: sec}
+	if _, err := c.AccessToken(ctx); err == nil {
+		t.Fatal("AccessToken: want error, got nil")
+	} else if errors.Is(err, ErrSignedOut) {
+		t.Fatalf("AccessToken on bad_request = ErrSignedOut, want a plain error: %v", err)
+	}
+	if v, err := sec.Get(refreshKey); err != nil || v != "r1" {
+		t.Fatalf("refresh token lost: %v %q", err, v)
+	}
+}
+
+// flakySet fails the first N calls to Set, then delegates to the embedded
+// Memory store, to exercise keep()'s retry of the keychain write.
+type flakySet struct {
+	*secret.Memory
+	failures int
+}
+
+func (f *flakySet) Set(key, value string) error {
+	if f.failures > 0 {
+		f.failures--
+		return errors.New("temporary keychain failure")
+	}
+	return f.Memory.Set(key, value)
+}
+
+func TestKeepRetriesSecretSet(t *testing.T) {
+	f := &fakeServer{}
+	srv := httptest.NewServer(f.handler(t))
+	t.Cleanup(srv.Close)
+	store := &flakySet{Memory: secret.NewMemory(), failures: 2}
+	c := &Client{Base: srv.URL, HTTP: srv.Client(), Secrets: store}
+	if err := c.Exchange(ctx, "c1", "v1", "http://127.0.0.1:5000/callback"); err != nil {
+		t.Fatalf("Exchange with flaky secret store: %v", err)
+	}
+	if v, _ := store.Memory.Get(refreshKey); v != "r1" {
+		t.Fatalf("stored refresh = %q", v)
+	}
+}
+
+func TestLoginURLTrimsTrailingSlash(t *testing.T) {
+	c := &Client{Base: "https://sitemoment.com/api/"}
+	u, err := url.Parse(c.LoginURL("http://127.0.0.1:5000/callback", "st", "ch"))
+	if err != nil || u.Path != "/api/auth/desktop/start" {
+		t.Fatalf("LoginURL with trailing slash = %v %v", u, err)
+	}
+}
