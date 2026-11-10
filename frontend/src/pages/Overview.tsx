@@ -1,11 +1,16 @@
 import { useEffect, useState } from "react";
-import { api, errText } from "../api";
+import { api, errText, onEvent } from "../api";
 import { BindGSC } from "../components/BindGSC";
 import { ClicksChart } from "../components/ClicksChart";
 import { KpiRow } from "../components/KpiRow";
 import { QueriesTable } from "../components/QueriesTable";
 import { fmtInt, fmtTime } from "../format";
-import type { Overview, Site, SyncStatus } from "../types";
+import type { Overview, Site, SyncProgress, SyncStatus } from "../types";
+
+// While a backfill is running, refetching only on status changes leaves the
+// page blank for minutes (status stays "running" the whole time). Refetch on
+// progress events too, but throttled: a backfill can emit one per request.
+const PROGRESS_REFRESH_INTERVAL_MS = 5000;
 
 export function OverviewPage({ site, status, onChanged }: { site: Site; status?: SyncStatus; onChanged: () => void }) {
   const [days, setDays] = useState(28);
@@ -19,8 +24,22 @@ export function OverviewPage({ site, status, onChanged }: { site: Site; status?:
     return () => { live = false; };
   }, [site.id, site.gscProperty, days, status?.at]);
 
-  if (!site.gscProperty) return <BindGSC site={site} onBound={onChanged} />;
   const running = status?.state === "running";
+  useEffect(() => {
+    if (!site.gscProperty || !running) return;
+    let live = true;
+    let lastFetch = 0;
+    const off = onEvent<SyncProgress>("sync:progress", (p) => {
+      if (p.siteId !== site.id) return;
+      const now = Date.now();
+      if (now - lastFetch < PROGRESS_REFRESH_INTERVAL_MS) return;
+      lastFetch = now;
+      api.overview(site.id, days).then((o) => live && setOv(o)).catch((e) => live && setErr(errText(e)));
+    });
+    return () => { live = false; off(); };
+  }, [site.id, site.gscProperty, days, running]);
+
+  if (!site.gscProperty) return <BindGSC site={site} onBound={onChanged} />;
   return (
     <>
       <div className="toolbar">
