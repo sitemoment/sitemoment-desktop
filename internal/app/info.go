@@ -19,7 +19,7 @@ type InfoService struct {
 
 func (i *InfoService) Get() Info {
 	var size int64
-	for _, p := range []string{i.DBPath, i.DBPath + "-wal"} {
+	for _, p := range []string{i.DBPath, i.DBPath + "-wal", i.DBPath + "-shm"} {
 		if fi, err := os.Stat(p); err == nil {
 			size += fi.Size()
 		}

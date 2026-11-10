@@ -4,6 +4,7 @@ package app
 import (
 	"context"
 	"errors"
+	"log"
 	"sync"
 	"time"
 
@@ -26,9 +27,22 @@ type SyncService struct {
 	Syncer *gscsync.Syncer
 	Store  *store.Store
 	Emit   func(name string, data any)
+	// Ctx is the context in-flight syncs run under; main.go sets it to a
+	// context cancelled when the app quits. Not set by a frontend call: it
+	// is a plain field (Wails binds exported methods, not fields), and
+	// nothing exported here hands it back out. Defaults to
+	// context.Background() when nil.
+	Ctx context.Context
 
 	mu     sync.Mutex
 	status map[int64]SyncStatus
+}
+
+func (s *SyncService) context() context.Context {
+	if s.Ctx != nil {
+		return s.Ctx
+	}
+	return context.Background()
 }
 
 func (s *SyncService) setStatus(st SyncStatus) {
@@ -43,16 +57,26 @@ func (s *SyncService) setStatus(st SyncStatus) {
 	}
 }
 
-// SyncNow starts syncing a site unless it is already running.
+// SyncNow starts syncing a site unless it is already running. The check and
+// the switch to "running" happen in one critical section, so two concurrent
+// callers for the same site can never both start a run.
 func (s *SyncService) SyncNow(siteID int64) {
 	s.mu.Lock()
-	running := s.status[siteID].State == "running"
-	s.mu.Unlock()
-	if running {
+	if s.status == nil {
+		s.status = map[int64]SyncStatus{}
+	}
+	if s.status[siteID].State == "running" {
+		s.mu.Unlock()
 		return
 	}
-	s.setStatus(SyncStatus{SiteID: siteID, State: "running", At: time.Now().Unix()})
-	go s.run(context.Background(), siteID)
+	st := SyncStatus{SiteID: siteID, State: "running", At: time.Now().Unix()}
+	s.status[siteID] = st
+	s.mu.Unlock()
+
+	if s.Emit != nil {
+		s.Emit("sync:status", st)
+	}
+	go s.run(s.context(), siteID)
 }
 
 // Statuses lists the latest status of every site that has synced.
@@ -103,11 +127,13 @@ func RunSyncLoop(ctx context.Context, s *SyncService, every time.Duration) {
 	t := time.NewTicker(every)
 	defer t.Stop()
 	for {
-		if sites, err := s.Store.Sites(ctx); err == nil {
-			for _, site := range sites {
-				if site.GSCProperty != "" {
-					s.SyncNow(site.ID)
-				}
+		sites, err := s.Store.Sites(ctx)
+		if err != nil {
+			log.Printf("app: list sites for sync: %v", err)
+		}
+		for _, site := range sites {
+			if site.GSCProperty != "" {
+				s.SyncNow(site.ID)
 			}
 		}
 		select {
