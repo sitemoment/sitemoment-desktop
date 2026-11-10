@@ -58,12 +58,53 @@ func TestReceiverRejects(t *testing.T) {
 			t.Fatal(err)
 		}
 		go get(t, r.RedirectURI()+q)
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		// "?code=abc&state=other" (wrong state, no error) is now silently
+		// ignored once Wait has registered "s1" as the expected state, so
+		// that case only ever fails via the ctx deadline; keep it short.
+		ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 		if _, err := r.Wait(ctx, "s1"); err == nil {
 			t.Errorf("%s: accepted", q)
 		}
 		cancel()
 		r.Close()
+	}
+}
+
+// TestReceiverIgnoresStrayState checks that once Wait has registered the
+// state it expects, a callback for some other state (no error) is ignored
+// (404s, not consumed) rather than taking the one result slot, so the
+// genuine callback that follows still gets through.
+func TestReceiverIgnoresStrayState(t *testing.T) {
+	r, err := Listen()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+
+	type waitResult struct {
+		code string
+		err  error
+	}
+	resCh := make(chan waitResult, 1)
+	go func() {
+		wctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		code, err := r.Wait(wctx, "right")
+		resCh <- waitResult{code, err}
+	}()
+	time.Sleep(20 * time.Millisecond) // let Wait register "right" as the expected state
+
+	get(t, r.RedirectURI()+"?code=wrong-code&state=bad")
+	time.Sleep(20 * time.Millisecond)
+	get(t, r.RedirectURI()+"?code=right-code&state=right")
+
+	select {
+	case res := <-resCh:
+		if res.err != nil || res.code != "right-code" {
+			t.Fatalf("Wait = %q, %v, want %q, nil", res.code, res.err, "right-code")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Wait did not return")
 	}
 }
 
