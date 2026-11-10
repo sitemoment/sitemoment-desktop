@@ -43,4 +43,16 @@ export function onEvent<T>(name: string, fn: (data: T) => void): () => void {
   return Events.On(name, (ev) => fn(ev.data as T));
 }
 
-export const errText = (e: unknown) => (e instanceof Error ? e.message : String(e));
+/** Matches Go net package errors such as "dial tcp ...", "no such host", and client timeouts. */
+export const isNetworkError = (msg: string) => /dial tcp|no such host|timeout/.test(msg);
+
+/** Translates known Go error messages (oauthx, google, net) into Chinese for the UI; anything else passes through unchanged. */
+export const errText = (e: unknown) => {
+  const msg = e instanceof Error ? e.message : String(e);
+  if (msg.includes("access_denied")) return "已取消登录";
+  if (msg.includes("state mismatch")) return "登录请求不匹配，请重试";
+  if (msg.includes("Search Console access was not granted")) return "没有授予 Search Console 读取权限，请重新连接并勾选";
+  if (msg.includes("authorization expired, connect the account again")) return "Google 授权已失效，请重新连接";
+  if (isNetworkError(msg)) return "网络连接失败，请检查网络";
+  return msg;
+};
