@@ -4,6 +4,7 @@ bin
 frontend/dist
 frontend/node_modules
 
+/sitemoment-desktop
 /build/bin/
 /frontend/dist/
 /frontend/node_modules/
