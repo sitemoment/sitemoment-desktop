@@ -16,9 +16,16 @@ function isGoogleHost(host) {
   return /(^|\.)google\.[a-z.]+$/i.test(host);
 }
 
+function isHttpUrl(u) {
+  return !!u && (u.protocol === "http:" || u.protocol === "https:");
+}
+
 // resolveUrl picks the best destination url+provenance for a result <a>/<h3>:
 // a decoded /url?q= redirect target, else the href itself if it already
 // points off Google, else the nearest <cite> text inside the result block.
+// Every branch is required to end up as a real http(s) URL; anything that
+// doesn't parse that way (including breadcrumb-style cite text such as
+// "www.example.com › Tools › Make") is rejected rather than guessed at.
 function resolveUrl(a, h3) {
   var u;
   try {
@@ -32,14 +39,25 @@ function resolveUrl(a, h3) {
       return { url: q, urlFrom: "redirect" };
     }
   }
-  if (!isGoogleHost(u.hostname)) {
+  if (isHttpUrl(u) && !isGoogleHost(u.hostname)) {
     return { url: a.href, urlFrom: "direct" };
   }
   var block = h3.closest("div[data-hveid], div.g, div");
   var cite = block ? sm.$("cite", block) : null;
   if (cite) {
     var text = sm.text(cite);
-    if (text) return { url: text, urlFrom: "cite" };
+    if (text && text.indexOf(" ") === -1 && text.indexOf("›") === -1) {
+      var candidate = /^https?:\/\//i.test(text) ? text : "https://" + text;
+      var cu = null;
+      try {
+        cu = new URL(candidate);
+      } catch (e2) {
+        cu = null;
+      }
+      if (isHttpUrl(cu) && /\./.test(cu.hostname)) {
+        return { url: cu.href, urlFrom: "cite" };
+      }
+    }
   }
   return null;
 }

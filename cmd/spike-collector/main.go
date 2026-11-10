@@ -92,6 +92,10 @@ func main() {
 			case "result":
 				fmt.Printf("RESULT after %s: %s\n", took.Round(time.Millisecond), m.Data)
 				win.Hide()
+				// The run is done: clear it so any late message still
+				// carrying this run id (e.g. from a second navigation
+				// event on the same page) is rejected by Verify instead
+				// of producing a duplicate RESULT.
 				mu.Lock()
 				run = collect.Run{}
 				mu.Unlock()
@@ -99,9 +103,14 @@ func main() {
 			case "need_human":
 				log.Printf("captcha: showing the window; solve it and the page reloads")
 				win.Show()
-				mu.Lock()
-				run = collect.Run{}
-				mu.Unlock()
+				// Unlike "result", the run is NOT done here: solving the
+				// captcha navigates the same window back to the results
+				// page for this same query, and onNavigated only
+				// re-injects when run.ID is non-empty. Clearing it here
+				// would leave the window stuck showing the captcha with
+				// nothing ever re-injecting it, until the 3-minute
+				// timeout. Keep run as-is so the next navigation re-runs
+				// the collector for it.
 			default:
 				log.Printf("%s: %s", m.Kind, m.Data)
 			}

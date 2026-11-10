@@ -142,3 +142,8 @@ RESULT after 641ms: {"url":"https://www.google.com/search?q=youtube+thumbnail+si
 - 相关搜索：**修好了**，有真实、看起来合理的数据。
 - Organic 网址：**按指定的回退算法（redirect → direct → cite）实测仍然基本拿不到**——当前 Google 页面没有 `<cite>` 元素，网址信息只在一个用混淆 class 名包裹的纯文本面包屑里，不在任务给的回退顺序之内。这是「合理努力后仍解不出来」的情况，上面给了脱敏示例块。
 - 重复消息拒绝：**代码逻辑上成立，但本轮没能抓到一次真实重复导航来验证**，如实标注未复现而不是标「验证通过」。
+
+### 代码评审后的两处修复（同一天，未重新跑 Google）
+
+- `main.go`：上一版把 `need_human` 也清空了 `run`，这是个会把验证码流程卡死的 bug——用户解完验证码后页面导航回结果页，`onNavigated` 发现 `run.ID` 是空串就不会再注入采集脚本，程序会一直卡到 3 分钟超时。改成只在 `result` 分支清空 `run`，`need_human` 分支保留 `run` 不变（只 `Show()` 窗口），这样验证码解决后的下一次导航还能用同一个 run 重新注入。
+- `google_serp.js` 的 `resolveUrl`：补上了之前没做的 http(s) 校验——`direct` 分支现在要求解析后的协议是 `http:`/`https:` 才会采用 `a.href`；`cite` 回退分支现在要求 cite 文本（没有协议前缀就先补 `https://`）能被解析成协议是 `http(s)` 且 host 里有点号、文本本身不含空格和 `›` 的网址，不满足就整条结果直接丢弃，不再把面包屑文本（例如 `www.kapwing.com › Tools › Make`）当网址返回。
