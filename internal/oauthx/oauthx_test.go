@@ -27,7 +27,8 @@ func get(t *testing.T, u string) {
 	t.Helper()
 	res, err := http.Get(u)
 	if err != nil {
-		t.Fatal(err)
+		t.Errorf("get %s: %v", u, err)
+		return
 	}
 	res.Body.Close()
 }
