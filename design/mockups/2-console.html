@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>风格 2 · 深色控制台 — SiteMoment Desktop</title>
+<link rel="stylesheet" href="base.css">
+<style>
+  :root {
+    color-scheme: dark;
+    --font: "Inter", -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif;
+    --mono: "JetBrains Mono", "SF Mono", ui-monospace, Menlo, monospace;
+    --desk: #05070b;
+    --surface-0: #0b0e14; --surface-1: #11151d; --surface-2: #1a1f2a;
+    --text-1: #e6e9ef; --text-2: #aab1bf; --text-3: #6d7586;
+    --line: #1f2531; --grid: #1c222d;
+    --accent: #8b6cf0;
+    --series-1: #1399b0; --series-2: #8b6cf0;
+    --good: #3fb950; --warn: #d29922; --bad: #f85149;
+    --tip-bg: #e6e9ef; --tip-text: #0b0e14;
+  }
+  body { font-size: 12.5px; }
+  .num, .kpi-value, .qtable td.num, .health-score b, .tool-meta, .sync-chip small, .statusbar { font-family: var(--mono); }
+  .titlebar { background: #080a0f; border-bottom: 1px solid var(--line); height: 34px; }
+  .titlebar .title { flex: 1; text-align: center; color: var(--text-3); font-size: 12px; }
+  .titlebar .cmd { font-family: var(--mono); font-size: 11px; color: var(--text-3); border: 1px solid var(--line); border-radius: 5px; padding: 2px 10px; background: var(--surface-1); min-width: 320px; }
+
+  .rail { width: 48px; flex: none; background: #080a0f; border-right: 1px solid var(--line); display: flex; flex-direction: column; align-items: center; gap: 4px; padding-top: 8px; }
+  .rail a { width: 34px; height: 34px; display: grid; place-items: center; border-radius: 7px; color: var(--text-3); font-size: 15px; }
+  .rail a.on { background: var(--surface-2); color: var(--text-1); box-shadow: inset 2px 0 0 var(--accent); }
+  .rail .bottom { margin-top: auto; margin-bottom: 8px; }
+
+  .side { width: 232px; flex: none; background: var(--surface-0); border-right: 1px solid var(--line); display: flex; flex-direction: column; }
+  .side h6 { margin: 0; padding: 10px 12px 6px; font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase; color: var(--text-3); font-weight: 600; }
+  .site { padding: 6px 12px; border-left: 2px solid transparent; }
+  .site.is-active { background: var(--surface-2); border-left-color: var(--series-1); }
+  .site-fav { background: var(--surface-2); color: var(--text-2); border-radius: 5px; }
+  .site.is-active .site-fav { background: #0f3640; color: #5fd0e2; }
+  .site-score { font-family: var(--mono); }
+  .nav-item { display: flex; padding: 4px 12px 4px 20px; color: var(--text-2); }
+  .nav-item.is-active { color: var(--text-1); background: var(--surface-1); }
+  .nav-item::before { content: "›"; width: 12px; color: var(--text-3); }
+  .acct { margin-top: auto; display: flex; gap: 8px; align-items: center; padding: 10px 12px; border-top: 1px solid var(--line); }
+  .acct-avatar { background: var(--surface-2); color: var(--accent); border-radius: 6px; }
+
+  main { flex: 1; min-width: 0; display: flex; flex-direction: column; background: var(--surface-0); }
+  .tabs { display: flex; height: 34px; flex: none; border-bottom: 1px solid var(--line); background: #080a0f; }
+  .tabs span { padding: 0 14px; display: flex; align-items: center; gap: 6px; color: var(--text-3); border-right: 1px solid var(--line); }
+  .tabs span.on { color: var(--text-1); background: var(--surface-0); box-shadow: inset 0 2px 0 var(--series-1); }
+  .toolbar { display: flex; align-items: center; gap: 12px; padding: 8px 14px; border-bottom: 1px solid var(--line); }
+  .toolbar .sync { display: flex; gap: 14px; }
+  .toolbar .seg { margin-left: auto; display: flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; font-family: var(--mono); font-size: 11px; }
+  .toolbar .seg span { padding: 3px 9px; color: var(--text-3); }
+  .toolbar .seg span.on { background: var(--surface-2); color: var(--text-1); }
+  .content { padding: 14px; display: grid; grid-template-columns: repeat(12, minmax(0,1fr)); gap: 12px; align-content: start; }
+  .panel { background: var(--surface-1); border: 1px solid var(--line); border-radius: 8px; padding: 12px; }
+  .panel h2 { margin: 0 0 8px; font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--text-3); display: flex; justify-content: space-between; font-weight: 600; }
+  .kpis { grid-column: span 12; display: grid; grid-template-columns: repeat(6, minmax(0,1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+  .kpi { background: var(--surface-1); padding: 10px 12px; }
+  .kpi-label { font-size: 11px; color: var(--text-3); display: flex; justify-content: space-between; }
+  .kpi-src { font-family: var(--mono); font-size: 10px; }
+  .kpi-value { font-size: 20px; color: var(--text-1); }
+  .kpi-foot { display: flex; justify-content: space-between; align-items: center; }
+  .kpi-delta { font-family: var(--mono); font-size: 11px; }
+  .kpi-delta.up { color: var(--good); }
+  .kpi .spark { width: 64px; --spark: #2c7f8f; }
+  .p-chart { grid-column: span 8; --chart-h: 200px; }
+  .p-health { grid-column: span 4; }
+  .p-queries { grid-column: span 12; }
+  .qtable td { border-top-color: var(--line); padding: 6px 8px; }
+  .qtable tr:hover td { background: var(--surface-2); }
+  .tag { font-family: var(--mono); font-size: 10.5px; padding: 1px 6px; border-radius: 4px; border: 1px solid; white-space: nowrap; }
+  .tag-target { color: #5fd0e2; border-color: #1b4a55; }
+  .tag-found { color: #e3b341; border-color: #4d3b12; }
+  .tag-scene { color: #b4a2f7; border-color: #3a2f66; }
+  .pri { font-family: var(--mono); font-size: 10.5px; padding: 0 5px; border-radius: 3px; background: #3d2a0a; color: #e3b341; }
+  .pri-P2 { background: var(--surface-2); color: var(--text-2); }
+  .pc { font-family: var(--mono); }
+  .pc-1 { background: #3d2a0a; color: #e3b341; }
+  .health-score b { color: var(--good); }
+  .chart-title { font-size: 12px; }
+
+  .agent { width: 380px; flex: none; border-left: 1px solid var(--line); background: var(--surface-0); display: flex; flex-direction: column; }
+  .agent-head { height: 34px; flex: none; display: flex; align-items: center; gap: 8px; padding: 0 12px; border-bottom: 1px solid var(--line); background: #080a0f; }
+  .agent-head b { font-size: 11px; letter-spacing: .06em; text-transform: uppercase; }
+  .agent-head .model { margin-left: auto; font-family: var(--mono); font-size: 11px; color: var(--text-2); }
+  .agent-log { flex: 1; padding: 12px; display: flex; flex-direction: column; gap: 10px; }
+  .msg-user { padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface-1); }
+  .msg-user::before { content: "you ›"; display: block; font-family: var(--mono); font-size: 10.5px; color: var(--text-3); }
+  .tools { gap: 0; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+  .tool { border-top: 1px solid var(--line); padding: 6px 8px; font-size: 12px; }
+  .tool:first-child { border-top: 0; }
+  .tool-kind { font-family: var(--mono); font-size: 10px; text-transform: uppercase; letter-spacing: .05em; }
+  .tool-local .tool-kind { color: var(--good); }
+  .tool-collector .tool-kind { color: #5fd0e2; }
+  .tool-cloud .tool-kind { color: #b4a2f7; }
+  .tool-state { font-family: var(--mono); }
+  .msg-ai { padding: 10px 12px; border-left: 2px solid var(--accent); background: var(--surface-1); border-radius: 0 6px 6px 0; }
+  .msg-ai h4 { font-family: var(--mono); font-size: 10.5px; letter-spacing: .06em; color: var(--accent); text-transform: uppercase; }
+  .msg-ai .check { padding: 6px 8px; border: 1px dashed #2d5a35; border-radius: 6px; color: #9be3a8; }
+  .msg-actions button { font-size: 11px; padding: 3px 8px; border-radius: 5px; border: 1px solid var(--line); background: var(--surface-2); }
+  .composer { padding: 10px 12px; border-top: 1px solid var(--line); }
+  .composer-box { background: var(--surface-1); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; }
+  .composer-box textarea::placeholder { color: var(--text-3); }
+  .chip { background: var(--surface-2); color: var(--text-2); font-family: var(--mono); font-size: 10.5px; border-radius: 4px; }
+  .send { border: 1px solid var(--accent); background: transparent; color: var(--accent); border-radius: 5px; width: 26px; height: 24px; }
+
+  .statusbar { height: 24px; flex: none; display: flex; align-items: center; gap: 18px; padding: 0 12px; font-size: 11px; color: #cfd6e4; background: #19394a; }
+  .statusbar .queue { display: flex; gap: 18px; }
+  .statusbar .right { margin-left: auto; display: flex; gap: 18px; }
+  .statusbar .spin { width: 8px; height: 8px; }
+</style>
+</head>
+<body>
+<div class="window">
+  <div class="titlebar">
+    <div class="lights"><i></i><i></i><i></i></div>
+    <div class="title"><span class="cmd">⌘K 搜索站点、关键词、页面，或问 Agent…</span></div>
+    <span style="width:52px"></span>
+  </div>
+  <div class="body">
+    <nav class="rail">
+      <a class="on" title="站点">◧</a><a title="关键词">⌕</a><a title="体检">✚</a><a title="任务">☑</a><a title="报告">▤</a><a title="采集器">⌬</a>
+      <a class="bottom" title="设置">⚙</a>
+    </nav>
+    <aside class="side">
+      <h6>站点 · 5</h6>
+      <div data-slot="sites"></div>
+      <h6>thumbnailsnap.com</h6>
+      <nav data-slot="nav"></nav>
+      <div class="acct" data-slot="account"></div>
+    </aside>
+    <main>
+      <div class="tabs"><span class="on">概览</span><span>关键词</span><span>体检 · 11-10</span><span>Agent 会话 #14</span></div>
+      <div class="toolbar">
+        <div class="sync" data-slot="sync"></div>
+        <div class="seg"><span>7d</span><span class="on">28d</span><span>3m</span><span>16m</span></div>
+      </div>
+      <div class="content scroll">
+        <div class="kpis" data-slot="kpis"></div>
+        <section class="panel p-chart"><div data-slot="chart"></div></section>
+        <section class="panel p-health"><h2>站点体检</h2><div data-slot="health"></div></section>
+        <section class="panel p-queries"><h2>已经在用的词 vs 想拿下的词 <span>5 / 1,284</span></h2><div data-slot="queries"></div></section>
+      </div>
+    </main>
+    <aside class="agent">
+      <div class="agent-head"><b>SEO Agent</b><span class="model" data-slot="agentModel"></span></div>
+      <div class="agent-log scroll" data-slot="agent"></div>
+      <div class="composer" data-slot="composer"></div>
+    </aside>
+  </div>
+  <div class="statusbar">
+    <span>● 已同步 09:42</span>
+    <span class="queue" data-slot="queue"></span>
+    <span class="right"><span>SQLite 182 MB</span><span>额度 312 / 1,000</span><span>v0.1.0</span></span>
+  </div>
+</div>
+<script src="shared.js"></script>
+</body>
+</html>

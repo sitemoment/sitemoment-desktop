@@ -1,0 +1,13 @@
+.task
+.wails
+bin
+frontend/dist
+frontend/node_modules
+
+/build/bin/
+/frontend/dist/
+/frontend/node_modules/
+/frontend/bindings/
+*.db
+*.db-wal
+*.db-shm

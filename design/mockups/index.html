@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>SiteMoment Desktop · 4 种 UI 风格</title>
+<style>
+  body { margin: 0; padding: 32px 40px 60px; font: 14px/1.6 -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif; background: #f4f4f6; color: #1d1d1f; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  .intro { color: #6b6b72; margin: 0 0 28px; max-width: 900px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(640px, 1fr)); gap: 28px; }
+  .card { background: #fff; border-radius: 14px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,.06); }
+  .frame { position: relative; width: 100%; aspect-ratio: 1440 / 900; overflow: hidden; background: #ddd; }
+  .frame iframe { position: absolute; top: 0; left: 0; width: 1440px; height: 900px; border: 0; transform-origin: 0 0; pointer-events: none; }
+  .meta { padding: 14px 18px 18px; }
+  .meta h2 { margin: 0; font-size: 16px; display: flex; justify-content: space-between; align-items: baseline; }
+  .meta h2 a { font-size: 13px; font-weight: 500; color: #0a6cff; }
+  .meta p { margin: 6px 0 0; color: #48484d; }
+  .meta ul { margin: 8px 0 0; padding-left: 18px; color: #6b6b72; font-size: 13px; }
+</style>
+</head>
+<body>
+<h1>SiteMoment Desktop · 4 种 UI 风格</h1>
+<p class="intro">同一个界面（概览 + SEO Agent）用 4 种风格各做一版，数据完全相同，方便直接对比。点「打开」看 1440×900 原尺寸，图表悬停可看每天的数值。数据都是虚构的。</p>
+<div class="grid">
+  <div class="card">
+    <div class="frame"><iframe src="1-clarity.html" loading="lazy"></iframe></div>
+    <div class="meta"><h2>1 · 原生清爽 <a href="1-clarity.html" target="_blank">打开 ↗</a></h2>
+      <p>像 macOS 自带应用：浅色、半透明侧栏、系统字体、蓝色强调色。三栏：站点 / 看板 / Agent。</p>
+      <ul><li>最稳妥，学习成本最低，Windows 上也不突兀</li><li>个性偏弱</li></ul></div>
+  </div>
+  <div class="card">
+    <div class="frame"><iframe src="2-console.html" loading="lazy"></iframe></div>
+    <div class="meta"><h2>2 · 深色控制台 <a href="2-console.html" target="_blank">打开 ↗</a></h2>
+      <p>像 IDE 或运维面板：深色、信息密度高、数字用等宽字体，有标签页、⌘K 命令面板和底部状态栏（同步、采集队列、额度）。</p>
+      <ul><li>适合每天盯数、管很多站的运营</li><li>和现在的 /admx 后台气质一致；新手会觉得有点硬</li></ul></div>
+  </div>
+  <div class="card">
+    <div class="frame"><iframe src="3-paper.html" loading="lazy"></iframe></div>
+    <div class="meta"><h2>3 · 纸感报告 <a href="3-paper.html" target="_blank">打开 ↗</a></h2>
+      <p>概览写成一份周报：先用一句话讲结论，再给数字和图。宋体标题、米色纸张，Agent 像页边批注。</p>
+      <ul><li>可信、安静，导出的周报和界面一个样</li><li>信息密度最低，多站点快速切换不如前两种</li></ul></div>
+  </div>
+  <div class="card">
+    <div class="frame"><iframe src="4-studio.html" loading="lazy"></iframe></div>
+    <div class="meta"><h2>4 · Agent 工作台 <a href="4-studio.html" target="_blank">打开 ↗</a></h2>
+      <p>以 Agent 对话为中心：左边是站点图标和会话列表，中间是对话（Agent 生成的表可以固定到概览），右边是本站数据。</p>
+      <ul><li>最能体现「本地数据 + Agent」的卖点，上手就是问问题</li><li>看板退居第二，纯看数的用户要多点一下</li></ul></div>
+  </div>
+</div>
+<script>
+  // scale each 1440×900 preview to its card width
+  const fit = () => document.querySelectorAll(".frame").forEach((f) => {
+    f.querySelector("iframe").style.transform = `scale(${f.clientWidth / 1440})`;
+  });
+  addEventListener("resize", fit); fit();
+</script>
+</body>
+</html>

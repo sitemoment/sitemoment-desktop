@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>风格 1 · 原生清爽 — SiteMoment Desktop</title>
+<link rel="stylesheet" href="base.css">
+<style>
+  :root {
+    --desk: #dfe3ea;
+    --surface-0: #ffffff; --surface-1: #ffffff; --surface-2: #f2f3f5;
+    --side: rgba(236, 237, 240, .92);
+    --text-1: #1d1d1f; --text-2: #48484d; --text-3: #8a8a8f;
+    --line: #ececee; --grid: #efeff1;
+    --accent: #0a6cff; --accent-soft: #e8f1ff;
+    --series-1: #2a78d6; --series-2: #eb6834;
+    --good: #1f8a3b; --warn: #b26b00; --bad: #d1242f;
+    --tip-bg: #1d1d1f; --tip-text: #fff;
+  }
+  .window { flex-direction: row; }
+  aside.side { width: 236px; flex: none; display: flex; flex-direction: column; background: var(--side); border-right: 1px solid #dcdde1; backdrop-filter: blur(30px); }
+  .side .titlebar { height: 46px; }
+  .side-sec { padding: 4px 10px; }
+  .side h6 { margin: 14px 10px 4px; font-size: 11px; font-weight: 600; color: var(--text-3); }
+  .site { padding: 6px 8px; border-radius: 7px; }
+  .site:hover { background: rgba(0,0,0,.04); }
+  .site.is-active { background: rgba(0,0,0,.07); }
+  .site-fav { background: #fff; box-shadow: 0 0 0 1px rgba(0,0,0,.08); color: var(--accent); }
+  .site-add .site-fav { color: var(--text-3); }
+  .site-add .site-name { color: var(--text-3); }
+  .nav-item { display: block; padding: 5px 10px; border-radius: 7px; color: var(--text-2); }
+  .nav-item.is-active { background: var(--accent); color: #fff; }
+  .acct { margin-top: auto; display: flex; gap: 10px; align-items: center; padding: 12px 18px; border-top: 1px solid #dcdde1; }
+  .acct-avatar { background: linear-gradient(135deg,#5b8cff,#8a5bff); color: #fff; }
+
+  main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  .main-bar { height: 46px; flex: none; display: flex; align-items: center; gap: 14px; padding: 0 22px; border-bottom: 1px solid var(--line); }
+  .main-bar h1 { font-size: 15px; margin: 0; }
+  .main-bar .sync { display: flex; gap: 14px; margin-left: 8px; }
+  .main-bar .range { margin-left: auto; font-size: 12px; padding: 4px 10px; border: 1px solid var(--line); border-radius: 7px; background: #fff; }
+  .main-bar .btn { font-size: 12px; padding: 4px 10px; border: 1px solid var(--line); border-radius: 7px; background: #fff; }
+  .content { padding: 20px 22px 28px; display: flex; flex-direction: column; gap: 18px; }
+  .kpis { display: grid; grid-template-columns: repeat(6, minmax(0,1fr)); gap: 10px; }
+  .kpi { padding: 12px; border: 1px solid var(--line); border-radius: 10px; }
+  .kpi-label { font-size: 12px; color: var(--text-2); display: flex; justify-content: space-between; }
+  .kpi-src { color: var(--text-3); font-size: 11px; }
+  .kpi-value { font-size: 22px; font-weight: 600; letter-spacing: -.01em; margin: 2px 0; }
+  .kpi-foot { display: flex; align-items: center; justify-content: space-between; gap: 4px; }
+  .kpi-delta { font-size: 12px; white-space: nowrap; }
+  .kpi-delta.up { color: var(--good); }
+  .kpi .spark { width: 60px; --spark: #9bb9e6; }
+  .card { border: 1px solid var(--line); border-radius: 12px; padding: 16px; }
+  .card h2 { font-size: 13px; margin: 0 0 8px; display: flex; justify-content: space-between; align-items: baseline; }
+  .card h2 small { font-weight: 400; color: var(--text-3); font-size: 12px; }
+  .grid2 { display: grid; grid-template-columns: 1.15fr .85fr; gap: 18px; }
+  .tag { font-size: 11px; padding: 1px 7px; border-radius: 5px; white-space: nowrap; }
+  .tag-target { background: var(--accent-soft); color: #0a5bd6; }
+  .tag-found { background: #fff3e0; color: #9a5300; }
+  .tag-scene { background: #eef7ee; color: #1f6f33; }
+  .pri { font-size: 11px; font-weight: 600; padding: 1px 6px; border-radius: 5px; background: #fff3e0; color: #9a5300; }
+  .pri-P2 { background: var(--surface-2); color: var(--text-2); }
+  .pc-1 { background: #fff3e0; color: #9a5300; }
+  .task-state { font-size: 11px; padding: 1px 7px; border-radius: 5px; background: var(--accent-soft); color: #0a5bd6; white-space: nowrap; }
+
+  aside.agent { width: 392px; flex: none; display: flex; flex-direction: column; border-left: 1px solid var(--line); background: #fbfbfc; }
+  .agent-bar { height: 46px; flex: none; display: flex; align-items: center; gap: 8px; padding: 0 16px; border-bottom: 1px solid var(--line); }
+  .agent-bar b { font-size: 13px; }
+  .agent-bar .model { margin-left: auto; font-size: 12px; color: var(--text-2); padding: 3px 9px; border: 1px solid var(--line); border-radius: 7px; background: #fff; }
+  .agent-log { flex: 1; padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+  .msg-user { align-self: flex-end; max-width: 85%; background: var(--accent); color: #fff; padding: 8px 12px; border-radius: 14px 14px 4px 14px; }
+  .tool { background: #fff; border: 1px solid var(--line); border-radius: 9px; }
+  .tool-collector .tool-kind { color: #8a4b00; }
+  .tool-cloud .tool-kind { color: #0a5bd6; }
+  .msg-ai { background: #fff; border: 1px solid var(--line); border-radius: 12px; padding: 14px; }
+  .msg-ai h4 { color: var(--text-3); font-weight: 600; }
+  .msg-ai .check { background: #f2f8f2; border-radius: 8px; padding: 8px 10px; }
+  .msg-actions button { font-size: 12px; padding: 4px 10px; border-radius: 7px; border: 1px solid var(--line); background: #fff; }
+  .composer { padding: 12px 16px 16px; border-top: 1px solid var(--line); }
+  .composer-box { background: #fff; border: 1px solid #d9dade; border-radius: 12px; padding: 10px 12px; box-shadow: 0 1px 2px rgba(0,0,0,.04); }
+  .chip { background: var(--surface-2); color: var(--text-2); }
+  .send { width: 28px; height: 28px; border-radius: 50%; border: 0; background: var(--accent); color: #fff; font-weight: 700; }
+  .queue { display: flex; justify-content: space-between; font-size: 11px; color: var(--text-3); padding: 0 16px 10px; }
+  .queue .spin { width: 8px; height: 8px; color: var(--accent); }
+</style>
+</head>
+<body>
+<div class="window">
+  <aside class="side">
+    <div class="titlebar"><div class="lights"><i></i><i></i><i></i></div></div>
+    <h6>站点</h6>
+    <div class="side-sec" data-slot="sites"></div>
+    <h6>thumbnailsnap.com</h6>
+    <nav class="side-sec" data-slot="nav"></nav>
+    <div class="acct" data-slot="account"></div>
+  </aside>
+
+  <main>
+    <div class="main-bar">
+      <h1>概览</h1>
+      <div class="sync" data-slot="sync"></div>
+      <span class="range">近 28 天 ▾</span>
+      <button class="btn">立即同步</button>
+    </div>
+    <div class="content scroll">
+      <div class="kpis" data-slot="kpis"></div>
+      <section class="card"><div data-slot="chart"></div></section>
+      <section class="card">
+        <h2>已经在用的词 vs 想拿下的词 <small>按点击排序 · 5 / 1,284</small></h2>
+        <div data-slot="queries"></div>
+      </section>
+      <div class="grid2">
+        <section class="card"><h2>站点体检</h2><div data-slot="health"></div></section>
+        <section class="card"><h2>任务 <small>2 项进行中</small></h2><div data-slot="tasks"></div></section>
+      </div>
+    </div>
+  </main>
+
+  <aside class="agent">
+    <div class="agent-bar"><b>SEO Agent</b><span class="model">◆ <span data-slot="agentModel"></span> ▾</span></div>
+    <div class="agent-log scroll" data-slot="agent"></div>
+    <div class="queue" data-slot="queue"></div>
+    <div class="composer" data-slot="composer"></div>
+  </aside>
+</div>
+<script src="shared.js"></script>
+</body>
+</html>

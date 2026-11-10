@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>风格 3 · 纸感报告 — SiteMoment Desktop</title>
+<link rel="stylesheet" href="base.css">
+<style>
+  :root {
+    --serif: "Songti SC", "Noto Serif SC", "Source Han Serif SC", Georgia, serif;
+    --desk: #d9d2c3;
+    --surface-0: #fbf8f1; --surface-1: #fbf8f1; --surface-2: #f1ece0;
+    --text-1: #1f1c17; --text-2: #4d473d; --text-3: #8c8476;
+    --line: #e6dfcf; --grid: #ece6d8;
+    --accent: #b5482a;
+    --series-1: #2b62a8; --series-2: #c4532d;
+    --good: #2f7a3a; --warn: #a2620a; --bad: #b42318;
+    --tip-bg: #1f1c17; --tip-text: #fbf8f1;
+  }
+  .window { flex-direction: row; }
+  .side { width: 220px; flex: none; display: flex; flex-direction: column; background: #f4efe3; border-right: 1px solid var(--line); }
+  .brand { padding: 4px 18px 10px; font-family: var(--serif); font-size: 18px; font-weight: 700; }
+  .brand small { display: block; font-family: var(--font); font-size: 11px; font-weight: 400; color: var(--text-3); }
+  .side h6 { margin: 14px 18px 6px; font-size: 11px; color: var(--text-3); font-weight: 500; letter-spacing: .1em; }
+  .site { padding: 6px 18px; }
+  .site.is-active { background: var(--surface-0); box-shadow: inset 3px 0 0 var(--accent); }
+  .site-fav { background: transparent; border: 1px solid #cfc6b2; border-radius: 50%; font-family: var(--serif); color: var(--text-2); }
+  .site-name { font-family: var(--serif); font-size: 14px; }
+  .nav-item { display: block; padding: 4px 18px; color: var(--text-2); }
+  .nav-item.is-active { color: var(--accent); font-weight: 600; }
+  .acct { margin-top: auto; display: flex; gap: 10px; align-items: center; padding: 14px 18px; border-top: 1px solid var(--line); }
+  .acct-avatar { background: var(--text-1); color: var(--surface-0); font-family: var(--serif); }
+
+  main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  main .titlebar { justify-content: flex-end; gap: 16px; border-bottom: 1px solid var(--line); }
+  main .titlebar .sync { display: flex; gap: 14px; margin-right: auto; }
+  .doc { padding: 34px 44px 60px; max-width: 920px; }
+  .kicker { font-size: 12px; letter-spacing: .12em; color: var(--accent); }
+  .doc h1 { font-family: var(--serif); font-size: 34px; line-height: 1.25; margin: 6px 0 8px; font-weight: 700; }
+  .lede { font-family: var(--serif); font-size: 16px; color: var(--text-2); margin: 0 0 26px; max-width: 640px; }
+  .kpis { display: grid; grid-template-columns: repeat(6, minmax(0,1fr)); border-top: 2px solid var(--text-1); border-bottom: 1px solid var(--line); }
+  .kpi { padding: 12px 12px 14px 0; }
+  .kpi + .kpi { padding-left: 12px; border-left: 1px solid var(--line); }
+  .kpi-label { font-size: 12px; color: var(--text-3); }
+  .kpi-src { margin-left: 6px; font-size: 10px; }
+  .kpi-value { font-family: var(--serif); font-size: 28px; font-weight: 600; line-height: 1.2; }
+  .kpi-delta { font-size: 12px; }
+  .kpi-delta.up { color: var(--good); }
+  .kpi .spark { display: none; }
+  .doc h2 { font-family: var(--serif); font-size: 20px; margin: 36px 0 4px; }
+  .doc h2 + p { margin: 0 0 14px; color: var(--text-3); font-size: 12px; }
+  .chart-head .chart-title { font-family: var(--serif); font-size: 15px; }
+  .qtable th { border-bottom: 1px solid var(--text-1); }
+  .qtable .q { font-family: var(--serif); font-size: 14px; font-weight: 400; }
+  .tag { font-size: 11px; white-space: nowrap; }
+  .tag::before { content: "— "; color: var(--text-3); }
+  .tag-target { color: var(--series-1); }
+  .tag-found { color: var(--accent); }
+  .tag-scene { color: var(--good); }
+  .two { display: grid; grid-template-columns: 1fr 1fr; gap: 36px; }
+  .health-score b { font-family: var(--serif); font-size: 34px; }
+  .pc { background: transparent; border: 1px solid var(--line); }
+  .pri { font-size: 11px; font-weight: 700; color: var(--accent); min-width: 22px; }
+  .pri-P2 { color: var(--text-3); }
+  .task-state { font-size: 11px; color: var(--accent); white-space: nowrap; min-width: 44px; }
+  .hl-main b, .task-main b { font-weight: 500; }
+
+  .notes { width: 380px; flex: none; display: flex; flex-direction: column; border-left: 1px solid var(--line); background: #f7f2e7; }
+  .notes .titlebar { border-bottom: 1px solid var(--line); gap: 8px; }
+  .notes .titlebar b { font-family: var(--serif); font-size: 15px; }
+  .notes .titlebar small { margin-left: auto; font-size: 11px; color: var(--text-3); }
+  .agent-log { flex: 1; padding: 20px 22px; display: flex; flex-direction: column; gap: 16px; }
+  .msg-user { font-family: var(--serif); font-size: 16px; line-height: 1.5; padding-left: 12px; border-left: 3px solid var(--text-1); }
+  .tools { gap: 0; }
+  .tool { padding: 6px 0; border-bottom: 1px dotted #d6cdb9; }
+  .tool-icon { color: var(--good); }
+  .tool-kind { letter-spacing: .08em; }
+  .tool-title { font-weight: 400; }
+  .msg-ai { font-family: var(--serif); font-size: 14px; line-height: 1.7; }
+  .msg-ai h4 { font-family: var(--font); font-size: 11px; letter-spacing: .12em; color: var(--accent); font-weight: 600; }
+  .msg-ai .check { border-top: 1px solid var(--text-1); padding-top: 8px; }
+  .msg-ai .check b { font-family: var(--font); font-size: 11px; letter-spacing: .12em; color: var(--accent); }
+  .msg-actions button { font-family: var(--font); font-size: 12px; border: 1px solid var(--text-1); background: transparent; padding: 3px 12px; border-radius: 0; }
+  .queue { display: flex; justify-content: space-between; font-size: 11px; color: var(--text-3); padding: 0 22px 8px; }
+  .queue .spin { width: 8px; height: 8px; }
+  .composer { padding: 12px 22px 18px; border-top: 1px solid var(--line); }
+  .composer-box textarea { font-family: var(--serif); font-size: 14px; border-bottom: 1px solid var(--text-1); padding-bottom: 6px; }
+  .chip { border: 1px solid var(--line); color: var(--text-2); border-radius: 0; }
+  .send { border: 0; background: var(--text-1); color: var(--surface-0); width: 28px; height: 28px; }
+</style>
+</head>
+<body>
+<div class="window">
+  <aside class="side">
+    <div class="titlebar"><div class="lights"><i></i><i></i><i></i></div></div>
+    <div class="brand">SiteMoment<small>本地 · 5 个站点</small></div>
+    <h6>站点</h6>
+    <div data-slot="sites"></div>
+    <h6>本站</h6>
+    <nav data-slot="nav"></nav>
+    <div class="acct" data-slot="account"></div>
+  </aside>
+
+  <main>
+    <div class="titlebar"><div class="sync" data-slot="sync"></div><span class="sync-chip">近 28 天 ▾</span><span class="sync-chip">导出周报</span></div>
+    <div class="scroll">
+      <article class="doc">
+        <div class="kicker">THUMBNAILSNAP.COM · 10-12 至 11-08</div>
+        <h1>点击比上期多两成，<br>「thumbnail generator ai」离第一页只差一步。</h1>
+        <p class="lede">Bing 点击涨得最快（+31%）。体检没有 P0，但有 3 个页面变成了 404，要在本周修掉。</p>
+        <div class="kpis" data-slot="kpis"></div>
+        <h2>流量走势</h2><p>点击每天的变化，虚线是前 28 天。</p>
+        <div data-slot="chart"></div>
+        <h2>已经在用的词，和想拿下的词</h2><p>按点击排序，显示 5 / 1,284 个。</p>
+        <div data-slot="queries"></div>
+        <div class="two">
+          <section><h2>站点体检</h2><p>每天 08:00 自动运行。</p><div data-slot="health"></div></section>
+          <section><h2>任务</h2><p>Agent 的建议，验收后自动复查。</p><div data-slot="tasks"></div></section>
+        </div>
+      </article>
+    </div>
+  </main>
+
+  <aside class="notes">
+    <div class="titlebar"><b>问 Agent</b><small data-slot="agentModel"></small></div>
+    <div class="agent-log scroll" data-slot="agent"></div>
+    <div class="queue" data-slot="queue"></div>
+    <div class="composer" data-slot="composer"></div>
+  </aside>
+</div>
+<script src="shared.js"></script>
+</body>
+</html>

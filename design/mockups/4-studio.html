@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>风格 4 · Agent 工作台 — SiteMoment Desktop</title>
+<link rel="stylesheet" href="base.css">
+<style>
+  :root {
+    --desk: #cfc8ff;
+    --surface-0: #f6f5fb; --surface-1: #ffffff; --surface-2: #f1effa;
+    --text-1: #17142b; --text-2: #4a4666; --text-3: #8b87a3;
+    --line: #ebe8f5; --grid: #efedf7;
+    --accent: #6d4aff; --accent-soft: #efeaff;
+    --series-1: #6d4aff; --series-2: #eb6834;
+    --good: #12805c; --warn: #b25e00; --bad: #d1242f;
+    --tip-bg: #17142b; --tip-text: #fff;
+    --chart-h: 170px;
+  }
+  .window { flex-direction: row; background: radial-gradient(1200px 500px at 30% -10%, #ebe5ff 0%, transparent 60%), var(--surface-0); }
+
+  .rail { width: 72px; flex: none; display: flex; flex-direction: column; align-items: center; gap: 10px; padding-top: 14px; }
+  .rail .lights { margin-bottom: 14px; }
+  .rail [data-slot="sites"] { display: flex; flex-direction: column; gap: 10px; align-items: center; }
+  .rail .site { position: relative; padding: 0; }
+  .rail .site-main, .rail .site-score { display: none; }
+  .rail .site-fav { width: 40px; height: 40px; border-radius: 13px; font-size: 15px; background: #fff; color: var(--text-2); box-shadow: 0 1px 3px rgba(23,20,43,.08); }
+  .rail .site:nth-child(1) .site-fav { background: linear-gradient(135deg,#7c5cff,#b05cff); color: #fff; }
+  .rail .site:nth-child(2) .site-fav { color: #0b7a8a; }
+  .rail .site:nth-child(3) .site-fav { color: #c2410c; }
+  .rail .site.is-active::before { content: ""; position: absolute; left: -16px; top: 8px; bottom: 8px; width: 4px; border-radius: 4px; background: var(--accent); }
+  .rail .site:nth-child(3)::after { content: ""; position: absolute; right: -2px; top: -2px; width: 10px; height: 10px; border-radius: 50%; background: var(--bad); border: 2px solid var(--surface-0); }
+  .rail .site-add .site-fav { background: transparent; border: 1.5px dashed #c9c3e6; box-shadow: none; }
+  .rail .me { margin-top: auto; margin-bottom: 16px; }
+  .rail .me .acct-text { display: none; }
+  .rail .me .acct-avatar { width: 36px; height: 36px; background: var(--text-1); color: #fff; }
+
+  .sessions { width: 232px; flex: none; padding: 16px 10px; display: flex; flex-direction: column; gap: 4px; }
+  .sessions .site-title { padding: 0 10px 8px; }
+  .sessions .site-title b { font-size: 16px; display: block; }
+  .sessions .sync { display: flex; flex-direction: column; gap: 2px; padding: 0 10px 12px; }
+  .new { margin: 0 6px 10px; padding: 9px 12px; border-radius: 12px; border: 0; background: var(--accent); color: #fff; font-weight: 600; text-align: left; box-shadow: 0 6px 16px rgba(109,74,255,.28); }
+  .sessions h6 { margin: 10px 10px 4px; font-size: 11px; color: var(--text-3); font-weight: 600; }
+  .sess { padding: 7px 10px; border-radius: 10px; color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .sess.on { background: #fff; color: var(--text-1); box-shadow: 0 1px 3px rgba(23,20,43,.06); }
+  .sess small { display: block; color: var(--text-3); font-size: 11px; }
+  .sessions .navrow { margin-top: auto; display: flex; flex-wrap: wrap; gap: 6px; padding: 10px 6px 4px; }
+  .sessions .nav-item { font-size: 12px; padding: 3px 9px; border-radius: 99px; background: #fff; color: var(--text-2); }
+  .sessions .nav-item.is-active { background: var(--text-1); color: #fff; }
+
+  .stage { flex: 1; min-width: 0; display: flex; flex-direction: column; margin: 10px 0 10px; background: #fff; border-radius: 20px; box-shadow: 0 2px 12px rgba(23,20,43,.06); }
+  .stage-head { flex: none; display: flex; align-items: center; gap: 10px; padding: 14px 22px; border-bottom: 1px solid var(--line); }
+  .stage-head b { font-size: 15px; }
+  .stage-head .model { margin-left: auto; font-size: 12px; padding: 5px 12px; border-radius: 99px; background: var(--accent-soft); color: var(--accent); font-weight: 500; }
+  .agent-log { flex: 1; padding: 22px 28px; display: flex; flex-direction: column; gap: 14px; }
+  .msg-user { align-self: flex-end; max-width: 75%; padding: 10px 14px; border-radius: 18px 18px 6px 18px; background: var(--text-1); color: #fff; font-size: 14px; }
+  .tools { flex-direction: row; flex-wrap: wrap; gap: 8px; }
+  .tool { flex: 1 1 calc(50% - 8px); border-radius: 14px; background: var(--surface-2); padding: 10px 12px; }
+  .tool-collector { background: #fff4ec; }
+  .tool-cloud { background: var(--accent-soft); }
+  .tool-collector .tool-kind { color: #b4480f; }
+  .tool-cloud .tool-kind { color: var(--accent); }
+  .tool-kind { font-weight: 600; }
+  .msg-ai { font-size: 14px; line-height: 1.65; max-width: 720px; }
+  .msg-ai h4 { font-size: 12px; color: var(--accent); }
+  .msg-ai .check { background: #e9f7f1; border-radius: 12px; padding: 10px 12px; }
+  .msg-ai .check b { color: var(--good); }
+  .msg-actions button { border: 1px solid var(--line); background: #fff; border-radius: 99px; padding: 5px 14px; font-size: 12px; }
+  .msg-actions button:first-child { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .artifact { border: 1px solid var(--line); border-radius: 16px; padding: 14px 16px; max-width: 760px; }
+  .artifact-head { display: flex; justify-content: space-between; margin-bottom: 4px; }
+  .artifact-head b { font-size: 13px; }
+  .artifact-head small { color: var(--text-3); font-size: 12px; }
+  .tag { font-size: 11px; padding: 2px 8px; border-radius: 99px; white-space: nowrap; }
+  .tag-target { background: var(--accent-soft); color: var(--accent); }
+  .tag-found { background: #fff1e6; color: #b4480f; }
+  .tag-scene { background: #e9f7f1; color: var(--good); }
+  .composer { padding: 0 22px 18px; }
+  .composer-box { border: 1.5px solid var(--line); border-radius: 18px; padding: 12px 14px; box-shadow: 0 8px 24px rgba(23,20,43,.06); }
+  .composer-box textarea { font-size: 14px; }
+  .chip { background: var(--surface-2); color: var(--text-2); }
+  .send { width: 34px; height: 34px; border-radius: 12px; border: 0; background: var(--accent); color: #fff; font-size: 16px; }
+  .suggest { display: flex; gap: 8px; padding: 0 22px 10px; flex-wrap: wrap; }
+  .suggest span { font-size: 12px; padding: 5px 12px; border-radius: 99px; border: 1px solid var(--line); color: var(--text-2); background: #fff; }
+
+  .ctx { width: 340px; flex: none; padding: 16px 14px; display: flex; flex-direction: column; gap: 12px; }
+  .ctx h3 { margin: 0; font-size: 12px; color: var(--text-3); font-weight: 600; display: flex; justify-content: space-between; }
+  .box { background: #fff; border-radius: 16px; padding: 14px; box-shadow: 0 1px 3px rgba(23,20,43,.05); }
+  .kpis { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .kpi { background: #fff; border-radius: 14px; padding: 10px 12px; box-shadow: 0 1px 3px rgba(23,20,43,.05); }
+  .kpi-label { font-size: 11px; color: var(--text-3); display: flex; justify-content: space-between; }
+  .kpi-value { font-size: 19px; font-weight: 700; }
+  .kpi-foot { display: flex; justify-content: space-between; align-items: center; }
+  .kpi-delta { font-size: 11px; }
+  .kpi-delta.up { color: var(--good); }
+  .kpi .spark { width: 50px; --spark: #b7a6ff; }
+  .ctx .chart-sub, .ctx .chart-table { display: none; }
+  .ctx .legend { gap: 10px; }
+  .health-score b { font-size: 24px; }
+  .pc { background: var(--surface-2); }
+  .pri { font-size: 11px; font-weight: 700; padding: 1px 7px; border-radius: 99px; background: #fff1e6; color: #b4480f; }
+  .pri-P2 { background: var(--surface-2); color: var(--text-2); }
+  .queue { display: flex; flex-direction: column; gap: 2px; font-size: 12px; color: var(--text-2); }
+  .queue .spin { width: 8px; height: 8px; color: var(--accent); }
+</style>
+</head>
+<body>
+<div class="window">
+  <nav class="rail">
+    <div class="lights"><i></i><i></i><i></i></div>
+    <div data-slot="sites"></div>
+    <div class="me" data-slot="account"></div>
+  </nav>
+
+  <aside class="sessions">
+    <div class="site-title"><b>thumbnailsnap.com</b></div>
+    <div class="sync" data-slot="sync"></div>
+    <button class="new">＋ 新对话</button>
+    <h6>今天</h6>
+    <a class="sess on" href="#">thumbnail generator ai 卡在第二页<small>4 个工具 · 2 积分</small></a>
+    <a class="sess" href="#">404 页面排查<small>体检 11-10 触发</small></a>
+    <h6>本周</h6>
+    <a class="sess" href="#">Bing 点击为什么涨了 31%</a>
+    <a class="sess" href="#">播客场景词能不能单独做页</a>
+    <a class="sess" href="#">对比 canva 的模板页结构</a>
+    <div class="navrow" data-slot="nav"></div>
+  </aside>
+
+  <section class="stage">
+    <div class="stage-head"><b>thumbnail generator ai 卡在第二页</b><span class="model">◆ <span data-slot="agentModel"></span> ▾</span></div>
+    <div class="agent-log scroll">
+      <div data-slot="agent" style="display:contents"></div>
+      <div class="artifact">
+        <div class="artifact-head"><b>相关关键词 · 已经在用 vs 想拿下</b><small>Agent 生成的表 · 可固定到概览</small></div>
+        <div data-slot="queries"></div>
+      </div>
+    </div>
+    <div class="suggest"><span>这些页面里哪个最该先改？</span><span>帮我写这节对比内容的提纲</span><span>看看 Bing 上的排名</span></div>
+    <div class="composer" data-slot="composer"></div>
+  </section>
+
+  <aside class="ctx scroll">
+    <h3>本站近 28 天 <span>GSC 截至 11-08</span></h3>
+    <div class="kpis" data-slot="kpis"></div>
+    <div class="box"><div data-slot="chart"></div></div>
+    <div class="box"><h3 style="margin-bottom:8px">站点体检</h3><div data-slot="health"></div></div>
+    <div class="box"><h3 style="margin-bottom:6px">采集器</h3><div class="queue" data-slot="queue"></div></div>
+  </aside>
+</div>
+<script src="shared.js"></script>
+</body>
+</html>

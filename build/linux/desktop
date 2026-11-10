@@ -1,0 +1,13 @@
+[Desktop Entry]
+Version=1.0
+Name=SiteMoment
+Comment=A sitemoment-desktop application
+# The Exec line includes %u to pass the URL to the application
+Exec=/usr/local/bin/sitemoment-desktop %u
+Terminal=false
+Type=Application
+Icon=sitemoment-desktop
+Categories=Utility;
+StartupWMClass=sitemoment-desktop
+
+ 
