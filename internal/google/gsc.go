@@ -158,9 +158,14 @@ func (g *GSC) Query(ctx context.Context, token, property string, q Query) ([]Row
 
 // backoff picks how long to wait before the next attempt (1-based: the
 // delay before the 2nd attempt is backoff(1, 0)). retryAfter, when > 0,
-// takes precedence over the exponential schedule.
+// takes precedence over the exponential schedule, but is still clamped to
+// maxBackoff: a server-supplied (or bogus) Retry-After must not be able to
+// park a sync slot for an arbitrarily long time.
 func backoff(attempt int, retryAfter time.Duration) time.Duration {
 	if retryAfter > 0 {
+		if retryAfter > maxBackoff {
+			return maxBackoff
+		}
 		return retryAfter
 	}
 	d := baseBackoff

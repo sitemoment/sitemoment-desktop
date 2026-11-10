@@ -138,6 +138,28 @@ func TestQueryHonorsRetryAfter(t *testing.T) {
 	}
 }
 
+func TestQueryClampsRetryAfter(t *testing.T) {
+	var slept []time.Duration
+	var calls int
+	g := &GSC{
+		sleep: func(_ context.Context, d time.Duration) error { slept = append(slept, d); return nil },
+		HTTP: client(func(*http.Request) (*http.Response, error) {
+			calls++
+			if calls == 1 {
+				return &http.Response{StatusCode: 429, Body: io.NopCloser(strings.NewReader(`{}`)),
+					Header: http.Header{"Retry-After": {"3600"}}}, nil
+			}
+			return reply(200, `{"rows":[]}`)
+		}),
+	}
+	if _, err := g.Query(ctx, "tok", "https://a.example.com/", Query{Start: "2026-11-01", End: "2026-11-01", Dimensions: []string{"date"}}); err != nil {
+		t.Fatalf("Query = %v", err)
+	}
+	if len(slept) != 1 || slept[0] != 30*time.Second {
+		t.Fatalf("slept = %v, want [30s] (Retry-After: 3600 clamped to maxBackoff)", slept)
+	}
+}
+
 func TestQueryCtxCancelDuringBackoff(t *testing.T) {
 	g := &GSC{
 		sleep: func(c context.Context, _ time.Duration) error { return c.Err() },
