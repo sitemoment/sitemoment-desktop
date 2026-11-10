@@ -4,7 +4,10 @@
 // by day, newest first, re-fetching the last few days on every run.
 package gscsync
 
-import "time"
+import (
+	"time"
+	_ "time/tzdata" // real America/Los_Angeles with DST, even without an OS zoneinfo database
+)
 
 // Span is an inclusive range of days to fetch.
 type Span struct{ From, Through time.Time }
