@@ -2,10 +2,12 @@
 package app
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -157,6 +159,83 @@ func TestGoogleConfigPeekTimesOutFast(t *testing.T) {
 	if oauth.Configured() {
 		t.Fatal("Configured after a timed-out peek")
 	}
+}
+
+// TestGoogleConfigRefreshEmptyKeepsCachedClient: a transient backend blip
+// (or a config GET that races a save) that comes back with empty fields
+// must not wipe a client that is already cached and working - that would
+// break everyone's Google sign-in on a hiccup.
+func TestGoogleConfigRefreshEmptyKeepsCachedClient(t *testing.T) {
+	st := openStore(t)
+	cs := newConfigServer("cid-a", "sec-a")
+	srv := httptest.NewServer(cs.handler(t))
+	defer srv.Close()
+	oauth := &google.OAuth{}
+	cfg := &GoogleConfig{OAuth: oauth, Cloud: &cloud.Client{Base: srv.URL, HTTP: srv.Client()}, Store: st}
+
+	if err := cfg.Refresh(ctx); err != nil {
+		t.Fatal(err)
+	}
+	cs.set("", "") // backend now reports nothing configured (blip, or a race with a save)
+	if err := cfg.Refresh(ctx); err != nil {
+		t.Fatal(err)
+	}
+	id, _ := oauthClientForTest(oauth)
+	if id != "cid-a" {
+		t.Fatalf("client id after an empty backend response = %q, want the cached cid-a kept", id)
+	}
+	if cachedID, _ := st.Setting(ctx, settingGoogleClientID); cachedID != "cid-a" {
+		t.Fatalf("cached client id after an empty backend response = %q", cachedID)
+	}
+	if cachedSecret, _ := st.Setting(ctx, settingGoogleClientSecret); cachedSecret != "sec-a" {
+		t.Fatalf("cached secret after an empty backend response = %q", cachedSecret)
+	}
+	if !oauth.Configured() {
+		t.Fatal("Configured after an empty backend response = false")
+	}
+}
+
+// TestGoogleConfigPeekRespectsOwnTimeoutDuringSlowRefresh: peek's short
+// timeout must hold even while a different, slow Refresh call (no deadline
+// of its own) is already in flight against the same GoogleConfig. Before
+// Refresh was made single-flight, a second caller blocked on the mutex
+// itself - ignoring its own context - until the first fetch finished.
+func TestGoogleConfigPeekRespectsOwnTimeoutDuringSlowRefresh(t *testing.T) {
+	cs := newConfigServer("cid", "sec")
+	cs.block = make(chan struct{})
+	srv := httptest.NewServer(cs.handler(t))
+	defer srv.Close()
+	old := googleConfigPeekTimeout
+	googleConfigPeekTimeout = 200 * time.Millisecond
+	defer func() { googleConfigPeekTimeout = old }()
+
+	st := openStore(t)
+	oauth := &google.OAuth{}
+	cfg := &GoogleConfig{OAuth: oauth, Cloud: &cloud.Client{Base: srv.URL, HTTP: srv.Client()}, Store: st}
+
+	// A slow Refresh already in flight, with no deadline of its own: it
+	// only returns once the server is unblocked, below.
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		cfg.Refresh(context.Background())
+	}()
+	for cs.calls.Load() == 0 {
+		time.Sleep(time.Millisecond)
+	}
+
+	start := time.Now()
+	cfg.peek(ctx)
+	if d := time.Since(start); d > time.Second {
+		t.Fatalf("peek took %v while a slow Refresh was in flight, want it bounded by googleConfigPeekTimeout (%v)", d, googleConfigPeekTimeout)
+	}
+	if oauth.Configured() {
+		t.Fatal("Configured after a timed-out peek, while the slow Refresh had not applied anything yet")
+	}
+
+	close(cs.block)
+	wg.Wait()
 }
 
 // oauthClientForTest reads the client id OAuth currently resolves to,

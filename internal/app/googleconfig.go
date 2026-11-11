@@ -3,6 +3,7 @@ package app
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
@@ -43,7 +44,15 @@ type GoogleConfig struct {
 	Cloud *cloud.Client
 	Store *store.Store
 
-	mu sync.Mutex // serializes Refresh so concurrent callers share one fetch's cost
+	mu     sync.Mutex
+	flight *googleConfigFlight // set while a fetch is in progress; nil otherwise
+}
+
+// googleConfigFlight is the one fetch shared by every concurrent Refresh
+// call: done closes when it finishes, with err holding its result.
+type googleConfigFlight struct {
+	done chan struct{}
+	err  error
 }
 
 // Load applies the last cached remote config, if any, without touching the
@@ -63,23 +72,81 @@ func (c *GoogleConfig) Load(ctx context.Context) {
 
 // Refresh fetches the backend's current configuration and applies it,
 // caching the result locally; a no-op returning nil when an env/ldflags
-// override is set. Concurrent calls share one in-flight fetch's cost
-// (serialized by mu) rather than hitting the backend once per caller.
+// override is set.
+//
+// Refresh is single-flight: when a fetch is already in progress, a second
+// caller does not start another one or block on a mutex (which would make
+// it miss its own ctx deadline) - it just waits for the in-flight fetch's
+// result, or its own ctx, whichever comes first. The in-flight fetch keeps
+// running regardless (bounded by its own initiator's ctx and, in any case,
+// by cloud.Client.DesktopConfig's internal timeout), so a caller who gave
+// up early never cancels it out from under anyone still waiting.
 func (c *GoogleConfig) Refresh(ctx context.Context) error {
 	if c.OAuth.ClientID != "" {
 		return nil
 	}
 	c.mu.Lock()
-	defer c.mu.Unlock()
+	if f := c.flight; f != nil {
+		c.mu.Unlock()
+		select {
+		case <-f.done:
+			return f.err
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	f := &googleConfigFlight{done: make(chan struct{})}
+	c.flight = f
+	c.mu.Unlock()
+
+	f.err = c.fetch(ctx)
+	close(f.done)
+
+	c.mu.Lock()
+	if c.flight == f {
+		c.flight = nil
+	}
+	c.mu.Unlock()
+	return f.err
+}
+
+// fetch does the actual network call and applies the result; only the
+// goroutine that started a flight (see Refresh) runs it.
+func (c *GoogleConfig) fetch(ctx context.Context) error {
 	cfg, err := c.Cloud.DesktopConfig(ctx)
 	if err != nil {
 		return err
 	}
-	c.OAuth.SetClient(cfg.Google.ClientID, cfg.Google.ClientSecret)
-	if err := c.Store.SetSetting(ctx, settingGoogleClientID, cfg.Google.ClientID); err != nil {
+	return c.apply(ctx, cfg.Google.ClientID, cfg.Google.ClientSecret)
+}
+
+// apply caches id/secret and switches OAuth to them, unless id is empty: an
+// empty response (the backend has nothing configured, or a transient blip)
+// must never wipe a client that is already cached and working.
+//
+// The two settings are written as a pair - secret first, then id - because
+// the local settings store has no transaction helper; if the second write
+// fails, the first is rolled back so a crash or a write error between the
+// two can never leave a cached id and secret that do not belong together.
+func (c *GoogleConfig) apply(ctx context.Context, id, secret string) error {
+	if id == "" {
+		return nil
+	}
+	oldSecret, err := c.Store.Setting(ctx, settingGoogleClientSecret)
+	if err != nil {
 		return err
 	}
-	return c.Store.SetSetting(ctx, settingGoogleClientSecret, cfg.Google.ClientSecret)
+	if err := c.Store.SetSetting(ctx, settingGoogleClientSecret, secret); err != nil {
+		return err
+	}
+	if err := c.Store.SetSetting(ctx, settingGoogleClientID, id); err != nil {
+		if restoreErr := c.Store.SetSetting(ctx, settingGoogleClientSecret, oldSecret); restoreErr != nil {
+			return fmt.Errorf("%w (and could not restore the previous cached secret: %v)", err, restoreErr)
+		}
+		return err
+	}
+	c.OAuth.SetClient(id, secret)
+	return nil
 }
 
 // peek makes a short, best-effort attempt to resolve the client when none
