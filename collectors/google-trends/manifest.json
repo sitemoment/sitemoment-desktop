@@ -3,7 +3,7 @@
   "name": "谷歌趋势",
   "version": "1.0.0",
   "tool": "google_trends",
-  "hosts": ["trends.google.com"],
+  "hosts": ["trends.google.com", "www.google.com"],
   "url": "https://trends.google.com/trends/?geo={geo}&hl=en-US",
   "cacheHours": 24,
   "minGapSeconds": 10,

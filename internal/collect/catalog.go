@@ -25,17 +25,21 @@ const (
 
 // CollectorView is a collector as the Collectors page shows it.
 type CollectorView struct {
-	ID            string   `json:"id"`
-	Name          string   `json:"name"`
-	Tool          string   `json:"tool"`
-	Version       string   `json:"version"`
-	Hosts         []string `json:"hosts"`
-	Builtin       bool     `json:"builtin"`
-	Status        string   `json:"status"`
-	Error         string   `json:"error"`
-	DailyLimit    int      `json:"dailyLimit"`
-	CacheHours    int      `json:"cacheHours"`
-	MinGapSeconds int      `json:"minGapSeconds"`
+	ID      string   `json:"id"`
+	Name    string   `json:"name"`
+	Tool    string   `json:"tool"`
+	Version string   `json:"version"`
+	Hosts   []string `json:"hosts"`
+	// SHA is the collector package's sha256 (Collector.SHA); a pending
+	// approval's version, hosts and sha must all still match what
+	// Approve is called with.
+	SHA           string `json:"sha"`
+	Builtin       bool   `json:"builtin"`
+	Status        string `json:"status"`
+	Error         string `json:"error"`
+	DailyLimit    int    `json:"dailyLimit"`
+	CacheHours    int    `json:"cacheHours"`
+	MinGapSeconds int    `json:"minGapSeconds"`
 }
 
 // Catalog holds the built-in collectors (trusted) and the user's own from
@@ -123,8 +127,36 @@ func (c *Catalog) Reload(ctx context.Context) error {
 
 // loadUser loads the user collector in directory name. Invalid ones are
 // listed under the directory name.
+// maxCollectorFileBytes caps each file in a user collector's package,
+// checked before it is even opened.
+const maxCollectorFileBytes = 256 << 10
+
+// checkRegularFiles makes sure every named file in dir is a plain regular
+// file (not a symlink, device or directory) within maxCollectorFileBytes.
+// Lstat (not Stat) means a symlink is rejected by its own mode rather than
+// followed to whatever, possibly outside dir, it points at.
+func checkRegularFiles(dir string, names ...string) error {
+	for _, name := range names {
+		fi, err := os.Lstat(filepath.Join(dir, name))
+		if err != nil {
+			return fmt.Errorf("读不到 %s", name)
+		}
+		if !fi.Mode().IsRegular() {
+			return fmt.Errorf("%s 不是普通文件（不能是符号链接）", name)
+		}
+		if fi.Size() > maxCollectorFileBytes {
+			return fmt.Errorf("%s 超过 256 KB", name)
+		}
+	}
+	return nil
+}
+
 func (c *Catalog) loadUser(ctx context.Context, name string, enabled, pending map[string]*Collector, tools map[string]bool) (CollectorView, *Collector) {
-	col, err := Load(os.DirFS(filepath.Join(c.Dir, name)), ".", false)
+	dir := filepath.Join(c.Dir, name)
+	if err := checkRegularFiles(dir, "manifest.json", "schema.json", "collector.js"); err != nil {
+		return CollectorView{ID: name, Name: name, Status: StatusInvalid, Error: err.Error(), Hosts: []string{}}, nil
+	}
+	col, err := Load(os.DirFS(dir), ".", false)
 	invalid := func(msg string) (CollectorView, *Collector) {
 		v := CollectorView{ID: name, Name: name, Status: StatusInvalid, Error: msg, Hosts: []string{}}
 		if col != nil {
@@ -144,7 +176,7 @@ func (c *Catalog) loadUser(ctx context.Context, name string, enabled, pending ma
 		return invalid(fmt.Sprintf("工具名 %s 已被占用", col.Tool))
 	}
 	g, err := c.Store.CollectorGrant(ctx, col.ID)
-	if err == nil && g.Version == col.Version && sameHosts(g.Hosts, col.Hosts) {
+	if err == nil && g.Version == col.Version && g.SHA == col.SHA && sameHosts(g.Hosts, col.Hosts) {
 		return viewOf(col, StatusEnabled, ""), col
 	}
 	if err != nil && !errors.Is(err, store.ErrNotFound) {
@@ -161,7 +193,7 @@ func sameHosts(a, b []string) bool {
 }
 
 func viewOf(c *Collector, status, msg string) CollectorView {
-	return CollectorView{ID: c.ID, Name: c.Name, Tool: c.Tool, Version: c.Version, Hosts: c.Hosts, Builtin: c.Builtin,
+	return CollectorView{ID: c.ID, Name: c.Name, Tool: c.Tool, Version: c.Version, Hosts: c.Hosts, SHA: c.SHA, Builtin: c.Builtin,
 		Status: status, Error: msg, DailyLimit: c.DailyLimit, CacheHours: c.CacheHours, MinGapSeconds: c.MinGapSeconds}
 }
 
@@ -237,14 +269,23 @@ func (c *Catalog) collectorsForHost(host string) []string {
 
 // Approve records the user's permission for a user collector to read its
 // hosts (this version only) and reloads.
-func (c *Catalog) Approve(ctx context.Context, id string) error {
+// Approve records the user's permission, but only if version, hosts and
+// sha (the collector's package sha256, Collector.SHA) match what is
+// actually pending right now: the Collectors page shows the user these
+// three before they click approve, and if the catalog changed underneath
+// (a reload raced the click, the directory changed) that approval must
+// not silently apply to something else.
+func (c *Catalog) Approve(ctx context.Context, id, version string, hosts []string, sha string) error {
 	c.mu.RLock()
 	col, ok := c.pending[id]
 	c.mu.RUnlock()
 	if !ok {
 		return fmt.Errorf("collect: %s is not waiting for approval", id)
 	}
-	if err := c.Store.GrantCollector(ctx, col.ID, col.Version, col.Hosts, c.now().Unix()); err != nil {
+	if col.Version != version || col.SHA != sha || !sameHosts(col.Hosts, hosts) {
+		return fmt.Errorf("collect: %s changed since it was shown for approval; reload and try again", id)
+	}
+	if err := c.Store.GrantCollector(ctx, col.ID, col.Version, col.Hosts, col.SHA, c.now().Unix()); err != nil {
 		return err
 	}
 	return c.Reload(ctx)

@@ -46,6 +46,12 @@ var (
 // dropped before it is even parsed.
 const maxMessageBytes = 1 << 20 // 1 MiB
 
+// WindowPrefix starts every collector window's name; collect and webview
+// both need it (collect names the windows it creates, webview uses the
+// same prefix to recognize and gate them), so it is exported here instead
+// of being duplicated as two separate literals.
+const WindowPrefix = "collector-"
+
 // maxLogLines caps how many "log" messages a run's buffer holds; a
 // flood of them is dropped (oldest kept, newest dropped) rather than
 // blocking or growing without bound. Unlike a result, error or
@@ -128,7 +134,7 @@ func (b *Browser) acquire(ctx context.Context) (*slot, error) {
 	b.mu.Lock()
 	if b.created < b.Size {
 		b.created++
-		name := fmt.Sprintf("collector-%d", b.created)
+		name := fmt.Sprintf(WindowPrefix+"%d", b.created)
 		b.mu.Unlock()
 		w, err := b.New(name)
 		if err != nil {

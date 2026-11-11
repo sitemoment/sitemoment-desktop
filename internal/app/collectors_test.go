@@ -67,7 +67,7 @@ func TestCollectorService(t *testing.T) {
 	if err != nil || s.Today[0].Count != 1 || s.Today[0].Limit != 200 {
 		t.Fatalf("stats = %+v, %v", s, err)
 	}
-	if _, err := svc.Approve(ctx, "google-serp"); err == nil {
+	if _, err := svc.Approve(ctx, "google-serp", "1.0.0", nil, "x"); err == nil {
 		t.Fatal("approved a built-in")
 	}
 	if dir, _ := svc.Dir(ctx); dir == "" {

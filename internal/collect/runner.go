@@ -69,10 +69,16 @@ type Runner struct {
 	Catalog *Catalog
 	Browser Loader
 	Post    map[string]PostFunc
-	Emit    func(name string, data any)
-	Now     func() time.Time
-	Wait    func(ctx context.Context, d time.Duration) error
-	Rand    func() float64
+	// CacheHours, if a collector has an entry, is called with its final
+	// (post-processed) data to shorten that one answer's cache lifetime
+	// below the manifest's CacheHours: 0 (or no entry) keeps the
+	// manifest's default. Used for google-serp's empty-results fallback,
+	// which otherwise would sit in the cache for a full week.
+	CacheHours map[string]func(data json.RawMessage) int
+	Emit       func(name string, data any)
+	Now        func() time.Time
+	Wait       func(ctx context.Context, d time.Duration) error
+	Rand       func() float64
 
 	mu      sync.Mutex
 	locks   map[string]chan struct{}
@@ -295,7 +301,13 @@ func (r *Runner) run(ctx context.Context, c *Collector, in map[string]any, hash,
 		r.Store.FinishCollectorRun(db, runID, status, "", Describe(err), finished, 0)
 		return Result{}, err
 	}
-	expires := finished + int64(c.CacheHours)*3600
+	cacheHours := c.CacheHours
+	if f := r.CacheHours[c.ID]; f != nil {
+		if h := f(data); h > 0 {
+			cacheHours = h
+		}
+	}
+	expires := finished + int64(cacheHours)*3600
 	if err := r.Store.FinishCollectorRun(db, runID, store.RunOK, string(data), "", finished, expires); err != nil {
 		return Result{}, err
 	}
@@ -375,6 +387,8 @@ func Describe(err error) string {
 		return "页面没有按时返回结果"
 	case errors.Is(err, context.Canceled):
 		return "已取消"
+	case errors.Is(err, context.DeadlineExceeded):
+		return "超时了，请再试一次"
 	case errors.Is(err, ErrUnknownCollector):
 		return "没有这个采集器，或者它还没有被允许运行"
 	}

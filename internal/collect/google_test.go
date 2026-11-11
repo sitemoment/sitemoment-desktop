@@ -4,8 +4,10 @@ package collect
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -89,5 +91,23 @@ func TestGoogleResolver(t *testing.T) {
 	}
 	if seen["GONE"] != 1 || seen["THROTTLED"] != 2 {
 		t.Fatalf("requests = %v", seen)
+	}
+}
+
+func TestGoogleResolverCapsToTenResults(t *testing.T) {
+	var organic []string
+	for i := 1; i <= 15; i++ {
+		organic = append(organic, fmt.Sprintf(`{"rank":%d,"title":"r%d","url":"https://example.com/%d","urlFrom":"direct"}`, i, i, i))
+	}
+	in := `{"url":"https://www.google.com/search?q=x","organic":[` + strings.Join(organic, ",") + `]}`
+	g := &GoogleResolver{Sleep: func(context.Context, time.Duration) error { return nil }}
+	out, err := g.Post(ctx, json.RawMessage(in))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var s SERP
+	json.Unmarshal(out, &s)
+	if len(s.Organic) != 10 {
+		t.Fatalf("got %d organic results, want 10", len(s.Organic))
 	}
 }

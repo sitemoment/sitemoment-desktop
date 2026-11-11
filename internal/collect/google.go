@@ -88,6 +88,13 @@ func (g *GoogleResolver) Post(ctx context.Context, data json.RawMessage) (json.R
 	if err := json.Unmarshal(data, &s); err != nil {
 		return nil, err
 	}
+	// The collector script already caps itself at 10, but don't trust a
+	// page to have behaved: resolving more than that is pointless work
+	// (and pointless requests to Google) if it somehow sent more.
+	const maxOrganic = 10
+	if len(s.Organic) > maxOrganic {
+		s.Organic = s.Organic[:maxOrganic]
+	}
 	base := strings.TrimSuffix(g.Base, "/")
 	if base == "" {
 		base = "https://www.google.com"

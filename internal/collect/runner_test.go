@@ -220,6 +220,39 @@ func TestRunnerSharesSpacingAndDailyLimitPerHost(t *testing.T) {
 	}
 }
 
+func TestRunnerCacheHoursOverride(t *testing.T) {
+	e := newRunner(t)
+	e.r.CacheHours = map[string]func(json.RawMessage) int{
+		"builtin-one": func(data json.RawMessage) int {
+			var v struct{ Empty bool }
+			json.Unmarshal(data, &v)
+			if v.Empty {
+				return 1
+			}
+			return 0 // keep the manifest's default (24h in the test fixture)
+		},
+	}
+	e.loader.err = nil
+	// fakeLoader always answers {"url": p.URL}; swap in a result the
+	// override reads as "empty" by handling it through a Post hook.
+	e.r.Post = map[string]PostFunc{"builtin-one": func(_ context.Context, _ json.RawMessage) (json.RawMessage, error) {
+		return json.RawMessage(`{"empty":true}`), nil
+	}}
+	if _, err := e.r.Run(ctx, "builtin-one", map[string]any{"q": "a"}); err != nil {
+		t.Fatal(err)
+	}
+	run, err := e.r.Runs(ctx, "", 1)
+	if err != nil || len(run) != 1 {
+		t.Fatalf("runs = %+v, %v", run, err)
+	}
+	// 1 hour later the cache entry must already be gone (the override),
+	// not still good for the fixture's normal 24h.
+	e.advance(90 * time.Minute)
+	if res, _ := e.r.Run(ctx, "builtin-one", map[string]any{"q": "a"}); res.Cached {
+		t.Fatal("empty result cached for longer than the 1h override")
+	}
+}
+
 func TestDescribeTruncatesLongText(t *testing.T) {
 	long := strings.Repeat("x", 1000)
 	got := Describe(errors.New(long))
@@ -228,5 +261,8 @@ func TestDescribeTruncatesLongText(t *testing.T) {
 	}
 	if !strings.HasSuffix(got, "…") {
 		t.Fatalf("Describe should mark truncation: %q", got)
+	}
+	if got := Describe(context.DeadlineExceeded); got != "超时了，请再试一次" {
+		t.Fatalf("Describe(DeadlineExceeded) = %q", got)
 	}
 }

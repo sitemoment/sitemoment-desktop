@@ -76,7 +76,29 @@ func TestCatalogBuiltinsAndApproval(t *testing.T) {
 	if _, ok := c.Get("demo-serp"); ok || len(c.Enabled()) != 1 {
 		t.Fatal("unapproved collector is runnable")
 	}
-	if err := c.Approve(ctx, "demo-serp"); err != nil {
+	view := func(id string) CollectorView {
+		for _, v := range c.List() {
+			if v.ID == id {
+				return v
+			}
+		}
+		t.Fatalf("%s not in the list", id)
+		return CollectorView{}
+	}
+	pending := view("demo-serp")
+	if pending.SHA == "" {
+		t.Fatal("no sha on the pending view")
+	}
+	// What the Collectors page showed no longer matches (e.g. a reload
+	// raced the click): Approve must not apply the stale click to
+	// whatever is pending now.
+	if err := c.Approve(ctx, "demo-serp", pending.Version, pending.Hosts, "not-the-real-sha"); err == nil {
+		t.Fatal("approved with a sha that does not match what is pending")
+	}
+	if _, ok := c.Get("demo-serp"); ok {
+		t.Fatal("a rejected approval still enabled the collector")
+	}
+	if err := c.Approve(ctx, "demo-serp", pending.Version, pending.Hosts, pending.SHA); err != nil {
 		t.Fatal(err)
 	}
 	if _, ok := c.Get("demo-serp"); !ok {
@@ -93,7 +115,7 @@ func TestCatalogBuiltinsAndApproval(t *testing.T) {
 	if _, ok := c.Get("demo-serp"); ok {
 		t.Fatal("changed collector kept its old approval")
 	}
-	if err := c.Approve(ctx, "builtin-one"); err == nil {
+	if err := c.Approve(ctx, "builtin-one", "1.0.0", []string{"www.example.com"}, "x"); err == nil {
 		t.Fatal("approved a built-in")
 	}
 }
@@ -103,5 +125,39 @@ func TestCatalogBrokenBuiltinFails(t *testing.T) {
 	fsys["builtin-one/manifest.json"] = &fstest.MapFile{Data: []byte(`{}`)}
 	if err := (&Catalog{Builtin: fsys, Store: openStore(t)}).Reload(ctx); err == nil {
 		t.Fatal("broken built-in loaded")
+	}
+}
+
+func TestCatalogRejectsSymlinkedOrOversizedUserFiles(t *testing.T) {
+	st := openStore(t)
+	dir := t.TempDir()
+	writeUser(t, dir, "symlinked", goodManifest)
+	outside := filepath.Join(dir, "outside.js")
+	if err := os.WriteFile(outside, []byte("sm.done({});"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(dir, "symlinked", "collector.js")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(dir, "symlinked", "collector.js")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	writeUser(t, dir, "oversized", goodManifest)
+	if err := os.WriteFile(filepath.Join(dir, "oversized", "collector.js"), make([]byte, maxCollectorFileBytes+1), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c := &Catalog{Store: st, Dir: dir}
+	if err := c.Reload(ctx); err != nil {
+		t.Fatal(err)
+	}
+	status := map[string]string{}
+	for _, v := range c.List() {
+		status[v.ID] = v.Status
+	}
+	if status["symlinked"] != StatusInvalid {
+		t.Fatalf("symlinked collector.js: %q", status["symlinked"])
+	}
+	if status["oversized"] != StatusInvalid {
+		t.Fatalf("oversized collector.js: %q", status["oversized"])
 	}
 }

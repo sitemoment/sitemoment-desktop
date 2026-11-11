@@ -9,6 +9,7 @@ package webview
 import (
 	"errors"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -37,10 +38,6 @@ const bootHTML = `<!doctype html>
 </script>
 `
 
-// windowPrefix starts every collector window's name (collect.Browser names
-// them collector-1, collector-2, …).
-const windowPrefix = "collector-"
-
 // windowHeader is set by Wails on every request a webview makes to the
 // app's asset server, naming the window (a page cannot set or change it).
 const windowHeader = "x-wails-window-name"
@@ -56,7 +53,7 @@ func Middleware(next http.Handler) http.Handler {
 			w.Write([]byte(bootHTML))
 			return
 		}
-		if strings.HasPrefix(r.Header.Get(windowHeader), windowPrefix) {
+		if strings.HasPrefix(r.Header.Get(windowHeader), collect.WindowPrefix) {
 			http.Error(w, "forbidden", http.StatusForbidden)
 			return
 		}
@@ -96,6 +93,7 @@ func (ws *Windows) New(name string) (collect.Window, error) {
 	case <-ready:
 		return window{w}, nil
 	case <-time.After(timeout):
+		w.Close() // never ran its boot page; don't leak it
 		return nil, errors.New("webview: the collector window did not start")
 	}
 }
@@ -107,7 +105,7 @@ func (ws *Windows) New(name string) (collect.Window, error) {
 // platform: see mainframe_darwin.go and mainframe_fallback.go.
 func (ws *Windows) RawMessage(w application.Window, msg string, o *application.OriginInfo) {
 	name := w.Name()
-	if !strings.HasPrefix(name, windowPrefix) {
+	if !strings.HasPrefix(name, collect.WindowPrefix) {
 		return
 	}
 	origin := ""
@@ -122,7 +120,17 @@ func (ws *Windows) RawMessage(w application.Window, msg string, o *application.O
 
 type window struct{ w *application.WebviewWindow }
 
-func (x window) Load(url string)  { x.w.SetURL(url) }
+// Load navigates to rawURL and retitles the window with the host being
+// checked, so a window shown for a human check (Show, below) identifies
+// what it is waiting on rather than always reading the same generic title.
+func (x window) Load(rawURL string) {
+	if u, err := url.Parse(rawURL); err == nil && u.Hostname() != "" {
+		x.w.SetTitle("SiteMoment 采集器 - " + u.Hostname())
+	} else {
+		x.w.SetTitle("SiteMoment 采集器")
+	}
+	x.w.SetURL(rawURL)
+}
 func (x window) Inject(js string) { x.w.ExecJS(js) }
 func (x window) Show()            { x.w.Show(); x.w.Focus() }
 func (x window) Hide()            { x.w.Hide() }

@@ -62,6 +62,9 @@ func TestLoadRejects(t *testing.T) {
 		"not json":       `{`,
 		"no hosts":       strings.Replace(goodManifest, `["www.example.com"]`, `[]`, 1),
 		"uppercase host": strings.Replace(goodManifest, `["www.example.com"]`, `["WWW.example.com"]`, 1),
+		"ip literal":     strings.Replace(goodManifest, `["www.example.com"]`, `["203.0.113.5"]`, 1),
+		"local TLD":      strings.Replace(goodManifest, `["www.example.com"]`, `["printer.local"]`, 1),
+		"internal TLD":   strings.Replace(goodManifest, `["www.example.com"]`, `["db.internal"]`, 1),
 	} {
 		if _, err := Load(pkg(m), "x", false); err == nil {
 			t.Errorf("%s: accepted", name)

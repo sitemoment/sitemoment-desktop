@@ -33,9 +33,11 @@ func (s *CollectorService) Rescan(ctx context.Context) ([]collect.CollectorView,
 	return s.Catalog.List(), nil
 }
 
-// Approve lets a user collector read the hosts it lists (this version).
-func (s *CollectorService) Approve(ctx context.Context, id string) ([]collect.CollectorView, error) {
-	if err := s.Catalog.Approve(ctx, id); err != nil {
+// Approve lets a user collector read the hosts it lists (this version,
+// this sha256 of its package). version, hosts and sha must match exactly
+// what the Collectors page showed the user for id: see Catalog.Approve.
+func (s *CollectorService) Approve(ctx context.Context, id, version string, hosts []string, sha string) ([]collect.CollectorView, error) {
+	if err := s.Catalog.Approve(ctx, id, version, hosts, sha); err != nil {
 		return nil, err
 	}
 	return s.Catalog.List(), nil

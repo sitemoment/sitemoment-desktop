@@ -116,12 +116,23 @@ func (s *Store) CancelUnfinishedCollectorRuns(ctx context.Context, now int64) er
 	return err
 }
 
+// PruneCollectorRuns deletes finished runs started before before, so the
+// table (also used as the cache and the daily-count source) doesn't grow
+// forever. Meant to be called once at startup.
+func (s *Store) PruneCollectorRuns(ctx context.Context, before int64) error {
+	_, err := s.db.ExecContext(ctx, "DELETE FROM collector_runs WHERE created_at < ? AND status NOT IN ('running', 'need_human')", before)
+	return err
+}
+
 // CollectorGrant is the user's permission for a third-party collector to
-// read the listed hosts, given for one version.
+// read the listed hosts, given for one version and one sha256 of its
+// package (manifest.json + schema.json + collector.js): a code change
+// without a version bump still revokes the grant.
 type CollectorGrant struct {
 	Collector string   `json:"collector"`
 	Version   string   `json:"version"`
 	Hosts     []string `json:"hosts"`
+	SHA       string   `json:"sha"`
 	GrantedAt int64    `json:"grantedAt"`
 }
 
@@ -129,8 +140,8 @@ type CollectorGrant struct {
 func (s *Store) CollectorGrant(ctx context.Context, collector string) (CollectorGrant, error) {
 	g := CollectorGrant{Collector: collector}
 	var hosts string
-	err := s.db.QueryRowContext(ctx, "SELECT version, hosts, granted_at FROM collector_grants WHERE collector = ?", collector).
-		Scan(&g.Version, &hosts, &g.GrantedAt)
+	err := s.db.QueryRowContext(ctx, "SELECT version, hosts, sha, granted_at FROM collector_grants WHERE collector = ?", collector).
+		Scan(&g.Version, &hosts, &g.SHA, &g.GrantedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return g, ErrNotFound
 	}
@@ -141,13 +152,13 @@ func (s *Store) CollectorGrant(ctx context.Context, collector string) (Collector
 }
 
 // GrantCollector records (or replaces) the user's permission.
-func (s *Store) GrantCollector(ctx context.Context, collector, version string, hosts []string, now int64) error {
+func (s *Store) GrantCollector(ctx context.Context, collector, version string, hosts []string, sha string, now int64) error {
 	raw, err := json.Marshal(hosts)
 	if err != nil {
 		return err
 	}
-	_, err = s.db.ExecContext(ctx, "INSERT INTO collector_grants (collector, version, hosts, granted_at) VALUES (?, ?, ?, ?) "+
-		"ON CONFLICT(collector) DO UPDATE SET version = excluded.version, hosts = excluded.hosts, granted_at = excluded.granted_at",
-		collector, version, string(raw), now)
+	_, err = s.db.ExecContext(ctx, "INSERT INTO collector_grants (collector, version, hosts, sha, granted_at) VALUES (?, ?, ?, ?, ?) "+
+		"ON CONFLICT(collector) DO UPDATE SET version = excluded.version, hosts = excluded.hosts, sha = excluded.sha, granted_at = excluded.granted_at",
+		collector, version, string(raw), sha, now)
 	return err
 }

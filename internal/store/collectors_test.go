@@ -59,14 +59,44 @@ func TestCollectorGrants(t *testing.T) {
 	if _, err := s.CollectorGrant(ctx, "x"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("missing grant: %v", err)
 	}
-	if err := s.GrantCollector(ctx, "x", "1.0.0", []string{"a.example.com"}, 5); err != nil {
+	if err := s.GrantCollector(ctx, "x", "1.0.0", []string{"a.example.com"}, "sha1", 5); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.GrantCollector(ctx, "x", "1.1.0", []string{"a.example.com", "b.example.com"}, 6); err != nil {
+	if err := s.GrantCollector(ctx, "x", "1.1.0", []string{"a.example.com", "b.example.com"}, "sha2", 6); err != nil {
 		t.Fatal(err)
 	}
 	g, err := s.CollectorGrant(ctx, "x")
-	if err != nil || g.Version != "1.1.0" || !reflect.DeepEqual(g.Hosts, []string{"a.example.com", "b.example.com"}) || g.GrantedAt != 6 {
+	if err != nil || g.Version != "1.1.0" || !reflect.DeepEqual(g.Hosts, []string{"a.example.com", "b.example.com"}) || g.SHA != "sha2" || g.GrantedAt != 6 {
 		t.Fatalf("grant = %+v, %v", g, err)
+	}
+}
+
+func TestPruneCollectorRuns(t *testing.T) {
+	s := open(t)
+	old, err := s.InsertCollectorRun(ctx, "google-serp", "h-old", `{}`, 1000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.FinishCollectorRun(ctx, old, RunOK, `{}`, "", 1000, 2000)
+	recent, err := s.InsertCollectorRun(ctx, "google-serp", "h-new", `{}`, 5000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.FinishCollectorRun(ctx, recent, RunOK, `{}`, "", 5000, 6000)
+	stillRunning, err := s.InsertCollectorRun(ctx, "google-serp", "h-running", `{}`, 1000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.PruneCollectorRuns(ctx, 4000); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CollectorRun(ctx, old); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("old finished run survived pruning: %v", err)
+	}
+	if r, err := s.CollectorRun(ctx, recent); err != nil || r.ID != recent {
+		t.Fatalf("recent run was pruned: %+v, %v", r, err)
+	}
+	if r, err := s.CollectorRun(ctx, stillRunning); err != nil || r.ID != stillRunning {
+		t.Fatalf("an unfinished old run was pruned: %+v, %v", r, err)
 	}
 }

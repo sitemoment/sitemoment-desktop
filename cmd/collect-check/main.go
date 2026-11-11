@@ -46,6 +46,11 @@ func main() {
 	if err := st.Migrate(context.Background()); err != nil {
 		log.Fatal(err)
 	}
+	// Keep collector_runs (also the cache and the daily-count source)
+	// from growing forever; the real app (main.go) should do the same.
+	if err := st.PruneCollectorRuns(context.Background(), time.Now().AddDate(0, 0, -30).Unix()); err != nil {
+		log.Fatal(err)
+	}
 	cat := &collect.Catalog{Builtin: collectors.FS, Store: st}
 	if err := cat.Reload(context.Background()); err != nil {
 		log.Fatal(err)
@@ -54,6 +59,18 @@ func main() {
 	runner := &collect.Runner{
 		Store: st, Catalog: cat, Browser: browser,
 		Post: map[string]collect.PostFunc{"google-serp": (&collect.GoogleResolver{}).Post},
+		// An empty google-serp result (Google's check page never
+		// resolved into real results within the collector's wait) is
+		// cheap to mistrust: cache it for 1 hour, not the manifest's
+		// full week.
+		CacheHours: map[string]func(json.RawMessage) int{"google-serp": func(data json.RawMessage) int {
+			var s collect.SERP
+			json.Unmarshal(data, &s)
+			if len(s.Organic) == 0 {
+				return 1
+			}
+			return 0
+		}},
 		Emit: func(name string, data any) {
 			if r, ok := data.(collect.RunView); ok && r.Status == store.RunNeedHuman {
 				log.Printf("run %d needs a human check: the window is shown; complete it there (this tool never does)", r.ID)

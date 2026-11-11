@@ -2,11 +2,14 @@
 package collect
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
 	"math"
+	"net"
 	"net/url"
 	"path"
 	"regexp"
@@ -65,8 +68,13 @@ type Collector struct {
 	Output      json.RawMessage
 	Script      string
 	Builtin     bool
-	params      inputSchema
-	host        string // the URL template's host, set by checkURL
+	// SHA is the sha256 (hex) of manifest.json + schema.json +
+	// collector.js, in that order. A grant binds this, not just the
+	// version, so a user collector's code changing without a version
+	// bump still asks the user to approve again.
+	SHA    string
+	params inputSchema
+	host   string // the URL template's host, set by checkURL
 }
 
 // Host is the exact host this collector's page is on (the one host from
@@ -89,29 +97,39 @@ const maxScript = 256 << 10
 
 // Load reads and validates the collector package in dir of fsys.
 func Load(fsys fs.FS, dir string, builtin bool) (*Collector, error) {
-	read := func(name string, v any) error {
+	readRaw := func(name string) ([]byte, error) {
 		b, err := fs.ReadFile(fsys, path.Join(dir, name))
 		if err != nil {
-			return fmt.Errorf("读不到 %s", name)
+			return nil, fmt.Errorf("读不到 %s", name)
 		}
-		if err := json.Unmarshal(b, v); err != nil {
-			return fmt.Errorf("%s 不是有效的 JSON：%v", name, err)
-		}
-		return nil
+		return b, nil
 	}
 	c := &Collector{Builtin: builtin}
-	if err := read("manifest.json", &c.Manifest); err != nil {
+	manifestRaw, err := readRaw("manifest.json")
+	if err != nil {
+		return nil, err
+	}
+	if err := json.Unmarshal(manifestRaw, &c.Manifest); err != nil {
+		return nil, fmt.Errorf("manifest.json 不是有效的 JSON：%v", err)
+	}
+	schemaRaw, err := readRaw("schema.json")
+	if err != nil {
 		return nil, err
 	}
 	var sch schemaFile
-	if err := read("schema.json", &sch); err != nil {
-		return nil, err
+	if err := json.Unmarshal(schemaRaw, &sch); err != nil {
+		return nil, fmt.Errorf("schema.json 不是有效的 JSON：%v", err)
 	}
-	js, err := fs.ReadFile(fsys, path.Join(dir, "collector.js"))
+	js, err := readRaw("collector.js")
 	if err != nil {
 		return nil, errors.New("读不到 collector.js")
 	}
 	c.Description, c.Input, c.Output, c.Script = strings.TrimSpace(sch.Description), sch.Input, sch.Output, string(js)
+	sum := sha256.New()
+	sum.Write(manifestRaw)
+	sum.Write(schemaRaw)
+	sum.Write(js)
+	c.SHA = hex.EncodeToString(sum.Sum(nil))
 	if err := c.validate(); err != nil {
 		return nil, err
 	}
@@ -141,6 +159,12 @@ func (c *Collector) validate() error {
 	for _, h := range m.Hosts {
 		if !hostPattern.MatchString(h) {
 			return fmt.Errorf("hosts 里的 %q 不是完整的小写域名（不支持通配符）", h)
+		}
+		if net.ParseIP(h) != nil {
+			return fmt.Errorf("hosts 里的 %q 是 IP 地址，不接受", h)
+		}
+		if strings.HasSuffix(h, ".local") || strings.HasSuffix(h, ".internal") {
+			return fmt.Errorf("hosts 里的 %q 是内网域名，不接受", h)
 		}
 	}
 	if c.Description == "" || len([]rune(c.Description)) > 2000 {
