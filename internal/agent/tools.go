@@ -10,6 +10,7 @@ func (a *Agent) toolset(ctx context.Context, env *Env, mode string) ([]*Tool, bo
 	var out []*Tool
 	if env.Site.ID != 0 {
 		out = append(out, localTools()...)
+		out = append(out, opsTools()...)
 	}
 	d := env.Deps
 	out = append(out, webTools(d)...)
