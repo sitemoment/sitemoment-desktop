@@ -92,6 +92,12 @@ func TestCrawlSkipsDisallowedURLs(t *testing.T) {
 	if res.Disallowed != 1 {
 		t.Fatalf("Disallowed = %d, want 1", res.Disallowed)
 	}
+	if res.Allowed(srv.URL + "/cart") {
+		t.Fatal("Allowed should say /cart is disallowed for us")
+	}
+	if !res.Allowed(srv.URL + "/admin") {
+		t.Fatal("Allowed should say /admin is allowed for us")
+	}
 }
 
 func TestCrawlStopsWhenRobotsTxtFails(t *testing.T) {
@@ -113,6 +119,9 @@ func TestCrawlStopsWhenRobotsTxtFails(t *testing.T) {
 	}
 	if is := issueByID(SiteIssues(res), "robots_server_error"); is == nil || is.Severity != SeverityP0 {
 		t.Fatalf("issues = %+v", SiteIssues(res))
+	}
+	if res.Allowed(srv.URL + "/") {
+		t.Fatal("Allowed should say nothing is allowed when robots.txt is a 5xx")
 	}
 	srv.Close()
 	res, err = Crawl(context.Background(), testFetcher(t, FetcherConfig{}), srv.URL+"/", CrawlOptions{Delay: -1})

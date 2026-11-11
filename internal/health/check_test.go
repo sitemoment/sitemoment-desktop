@@ -41,17 +41,26 @@ type site struct {
 	mu    sync.Mutex
 	pages map[string]string // path → extra <head> markup; missing = 404
 	links []string
-	srv   *httptest.Server
+	// extraDisallow are extra robots.txt Disallow lines (beyond /private), settable between checks.
+	extraDisallow []string
+	// hits counts requests per path, so tests can tell whether a URL was fetched again.
+	hits map[string]int
+	srv  *httptest.Server
 }
 
 func newSite(t *testing.T) *site {
-	s := &site{pages: map[string]string{"/": "", "/a": "", "/b": "", "/c": "", "/d": ""}, links: []string{"/a", "/b", "/c", "/d"}}
+	s := &site{pages: map[string]string{"/": "", "/a": "", "/b": "", "/c": "", "/d": ""}, links: []string{"/a", "/b", "/c", "/d"}, hits: map[string]int{}}
 	s.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		s.mu.Lock()
 		defer s.mu.Unlock()
+		s.hits[r.URL.Path]++
 		switch r.URL.Path {
 		case "/robots.txt":
-			fmt.Fprintf(w, "User-agent: *\nDisallow: /private\nSitemap: %s/sitemap.xml\n", s.srv.URL)
+			fmt.Fprint(w, "User-agent: *\nDisallow: /private\n")
+			for _, d := range s.extraDisallow {
+				fmt.Fprintf(w, "Disallow: %s\n", d)
+			}
+			fmt.Fprintf(w, "Sitemap: %s/sitemap.xml\n", s.srv.URL)
 			return
 		case "/sitemap.xml":
 			w.Header().Set("Content-Type", "application/xml")
@@ -82,6 +91,12 @@ func (s *site) edit(fn func()) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	fn()
+}
+
+func (s *site) hitCount(path string) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.hits[path]
 }
 
 // fakeInspector answers NEUTRAL for every URL in notIndexed, PASS otherwise.
@@ -177,6 +192,38 @@ func TestCheckFindsRegressions(t *testing.T) {
 		if is.Code == CodeLost || is.Code == CodeNewNoindex {
 			t.Errorf("%s reported twice: %+v", is.Code, is)
 		}
+	}
+}
+
+// TestRecheckSkipsRobotsDisallowedURLs: a page that was OK and is now
+// disallowed by robots.txt must not be re-fetched by the recheck (lost
+// pages/unseen-OK tracing), and must not be reported lost.
+func TestRecheckSkipsRobotsDisallowedURLs(t *testing.T) {
+	st := openStore(t)
+	s := newSite(t)
+	now := time.Date(2026, 11, 10, 8, 0, 0, 0, time.Local)
+	c := checker(t, st, s, &now)
+	ws, err := st.AddSite(ctx, "example.com", 1)
+	ok(t, err)
+
+	first, err := c.Check(ctx, ws, "manual", nil)
+	ok(t, err)
+	if first.Status != "done" || first.Pages != 5 {
+		t.Fatalf("first = %+v", first)
+	}
+
+	s.edit(func() { s.extraDisallow = append(s.extraDisallow, "/a") })
+	now = now.Add(24 * time.Hour)
+	before := s.hitCount("/a")
+	second, err := c.Check(ctx, ws, "schedule", nil)
+	ok(t, err)
+	if after := s.hitCount("/a"); after != before {
+		t.Fatalf("recheck fetched a robots-disallowed URL: hits %d → %d", before, after)
+	}
+	issues, err := st.CrawlIssues(ctx, second.ID)
+	ok(t, err)
+	if is := codes(issues)[CodeLost]; is.Count != 0 {
+		t.Fatalf("a robots-disallowed URL must not be reported lost: %+v", is)
 	}
 }
 

@@ -111,6 +111,22 @@ type CrawlResult struct {
 	Truncated bool `json:"truncated"`
 	// Disallowed counts the URLs robots.txt keeps our crawler away from (not fetched).
 	Disallowed int `json:"disallowed"`
+
+	// robots is this crawl's parsed robots.txt rules (nil: none found); agent
+	// is the product token they were resolved for. Allowed uses both.
+	robots *robotsInfo
+	agent  string
+}
+
+// Allowed reports whether this crawl's user agent may fetch rawURL under the
+// robots.txt it read (true when it has none, or the request failed). Callers
+// that re-fetch remembered URLs outside the crawl (health rechecks, lost-page
+// tracing) must check this first so they stay inside robots.txt too.
+func (r *CrawlResult) Allowed(rawURL string) bool {
+	if r.robots == nil {
+		return true
+	}
+	return r.robots.allowed(r.agent, rawURL)
 }
 
 // skipExt are link targets that are never HTML pages.
@@ -138,7 +154,7 @@ func Crawl(ctx context.Context, f *Fetcher, start string, opt CrawlOptions) (*Cr
 	ctx, cancel := context.WithTimeout(ctx, opt.Budget)
 	defer cancel()
 
-	res := &CrawlResult{Start: startURL, Host: hostKey(origin.Hostname()), Sitemaps: []string{}, SitemapURLs: []string{}, Pages: []CrawledPage{}}
+	res := &CrawlResult{Start: startURL, Host: hostKey(origin.Hostname()), Sitemaps: []string{}, SitemapURLs: []string{}, Pages: []CrawledPage{}, agent: f.agentToken()}
 	c := &crawler{f: f, opt: opt, res: res, seen: map[string]int{}, disallowed: map[string]bool{}}
 	c.readSitemaps(ctx, origin)
 	inSitemap := map[string]bool{}
@@ -161,7 +177,7 @@ func Crawl(ctx context.Context, f *Fetcher, start string, opt CrawlOptions) (*Cr
 				dups = append(dups, q)
 				continue
 			}
-			if c.robots != nil && !c.robots.allowed(f.agentToken(), q.url) {
+			if !res.Allowed(q.url) {
 				if !c.disallowed[q.url] {
 					c.disallowed[q.url] = true
 					res.Disallowed++
@@ -200,12 +216,10 @@ type queued struct {
 }
 
 type crawler struct {
-	f    *Fetcher
-	opt  CrawlOptions
-	res  *CrawlResult
-	seen map[string]int // url → index in res.Pages
-	// robots is the site's robots.txt (nil when it has none).
-	robots     *robotsInfo
+	f          *Fetcher
+	opt        CrawlOptions
+	res        *CrawlResult
+	seen       map[string]int // url → index in res.Pages
 	disallowed map[string]bool
 }
 
@@ -239,12 +253,12 @@ func (c *crawler) readSitemaps(ctx context.Context, origin *url.URL) {
 	}
 	if c.res.RobotsError != "" || c.res.RobotsStatus >= 500 {
 		// RFC 9309 §2.3.1.4: an unreachable robots.txt means "crawl nothing".
-		c.robots = &robotsInfo{groups: []robotsGroup{{agents: []string{"*"}, rules: []robotsRule{{pattern: "/"}}}}}
+		c.res.robots = &robotsInfo{groups: []robotsGroup{{agents: []string{"*"}, rules: []robotsRule{{pattern: "/"}}}}}
 	}
 	if err == nil && r.StatusCode >= 200 && r.StatusCode < 300 {
 		c.res.RobotsTxt = true
 		ri := parseRobots(r.Body)
-		c.robots = &ri
+		c.res.robots = &ri
 		c.res.RobotsBlocksRoot = ri.blocksRoot
 		for _, s := range ri.sitemaps {
 			if u, err := url.Parse(s); err == nil && hostKey(u.Hostname()) == hostKey(origin.Hostname()) {

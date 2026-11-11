@@ -61,7 +61,9 @@ func orSelf(c string) string {
 	return c
 }
 
-// unseenOK lists previously OK pages this crawl did not reach, at most limit.
+// unseenOK lists previously OK pages this crawl did not reach, at most
+// limit. Pages robots.txt now disallows are left out: rechecking them would
+// fetch a URL our crawler itself would skip.
 func unseenOK(prev map[string]store.Page, res *rank.CrawlResult, limit int) []string {
 	crawled := make(map[string]bool, len(res.Pages))
 	for _, p := range res.Pages {
@@ -69,7 +71,7 @@ func unseenOK(prev map[string]store.Page, res *rank.CrawlResult, limit int) []st
 	}
 	var out []string
 	for u, p := range prev {
-		if p.OK && !crawled[u] {
+		if p.OK && !crawled[u] && res.Allowed(u) {
 			out = append(out, u)
 		}
 	}
@@ -83,8 +85,17 @@ func unseenOK(prev map[string]store.Page, res *rank.CrawlResult, limit int) []st
 // lostPages traces urls (previously OK pages that fail now or were not
 // reached) and returns the issue lines of those that end on an error without
 // a redirect, plus memory rows for every traced URL (what the trace cannot
-// see, such as the title, is kept from prev).
+// see, such as the title, is kept from prev). URLs robots.txt now disallows
+// are skipped: this traces with a direct fetch, outside the crawler that
+// enforces robots.txt itself.
 func lostPages(ctx context.Context, f *rank.Fetcher, urls []string, res *rank.CrawlResult, prev map[string]store.Page, now int64) ([]string, []store.Page) {
+	allowed := urls[:0:0]
+	for _, u := range urls {
+		if res.Allowed(u) {
+			allowed = append(allowed, u)
+		}
+	}
+	urls = allowed
 	if len(urls) == 0 {
 		return nil, nil
 	}
