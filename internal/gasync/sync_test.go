@@ -131,3 +131,35 @@ func TestSyncSiteErrors(t *testing.T) {
 		t.Fatalf("unbound: %v", err)
 	}
 }
+
+// spyLimiter is a ratelimit.Limiter stand-in that just records the keys
+// Acquire was called with.
+type spyLimiter struct {
+	mu   sync.Mutex
+	keys []string
+}
+
+func (l *spyLimiter) Acquire(_ context.Context, key string) (func(), error) {
+	l.mu.Lock()
+	l.keys = append(l.keys, key)
+	l.mu.Unlock()
+	return func() {}, nil
+}
+
+func TestSyncSiteUsesLimiterPerAccount(t *testing.T) {
+	st, site := setup(t)
+	lim := &spyLimiter{}
+	s := &Syncer{Store: st, Tokens: fakeTokens{}, GA: &fakeGA{}, Months: 1, Limiter: lim,
+		Now: func() time.Time { return time.Date(2026, 11, 10, 20, 0, 0, 0, time.UTC) }}
+	if _, err := s.SyncSite(ctx, site); err != nil {
+		t.Fatalf("SyncSite: %v", err)
+	}
+	if len(lim.keys) == 0 {
+		t.Fatal("Limiter.Acquire was never called")
+	}
+	for _, k := range lim.keys {
+		if k != "me@example.com" {
+			t.Fatalf("Acquire key = %q, want the GA account", k)
+		}
+	}
+}

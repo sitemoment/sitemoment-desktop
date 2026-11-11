@@ -51,7 +51,12 @@ type Syncer struct {
 	Tail         int              // newest days re-fetched; default 3
 	RefreshAfter time.Duration    // tail days older than this are re-fetched; default 6h
 	MaxRequests  int              // per SyncSite call; default 200
-	Progress     func(gscsync.Progress)
+	// Limiter paces requests per Google account, across every site and
+	// slice sharing it (the same Limiter instance as gscsync.Syncer, since
+	// both draw on the account's Google API quota); nil means no extra
+	// pacing.
+	Limiter  gscsync.Limiter
+	Progress func(gscsync.Progress)
 }
 
 func or[T comparable](v, def T) T {
@@ -101,7 +106,18 @@ func (s *Syncer) SyncSite(ctx context.Context, site store.Site) (gscsync.Result,
 				break
 			}
 			start, end := sp.From.Format(store.DayLayout), sp.Through.Format(store.DayLayout)
+			var release func()
+			if s.Limiter != nil {
+				r, lerr := s.Limiter.Acquire(ctx, site.GAAccount)
+				if lerr != nil {
+					return res, lerr
+				}
+				release = r
+			}
 			rows, err := s.GA.Report(ctx, token, site.GAProperty, google.GAReport{Start: start, End: end, Dimensions: sl.Dimensions, Metrics: Metrics})
+			if release != nil {
+				release()
+			}
 			res.Requests++
 			if err != nil && !errors.Is(err, google.ErrTruncated) {
 				return res, fmt.Errorf("GA4 %s %s..%s: %w", sl.Name, start, end, err)
