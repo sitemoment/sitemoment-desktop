@@ -1,6 +1,18 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 (function () {
   "use strict";
+  // Before touching anything else: only run on a page the collector
+  // declared (exact host, https only). A page can navigate itself (a
+  // redirect, a stale late-arriving script injection after the window was
+  // released, the app's own wails:// boot page) to somewhere the run's
+  // nonce was never meant to be exposed to; bail out before the nonce or
+  // input is even assigned to a variable the page's own scripts could read.
+  var allowedHosts = __HOSTS__;
+  var hostOK = false;
+  for (var hi = 0; hi < allowedHosts.length; hi++) {
+    if (location.hostname === allowedHosts[hi]) { hostOK = true; break; }
+  }
+  if (location.protocol !== "https:" || !hostOK) return;
   var run = __RUN__, nonce = __NONCE__, input = __INPUT__;
   var finished = false;
   function post(kind, data) {

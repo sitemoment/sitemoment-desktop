@@ -10,8 +10,16 @@ const read = (path: string) => readFileSync(new URL(path, root), "utf8");
 interface Posted { run: string; nonce: string; kind: string; data: any }
 
 // run injects collector into a page loaded from html at url and resolves
-// with the first message that ends the run.
-async function run(collector: string, html: string, url: string, input: object, setup?: (w: any) => void): Promise<Posted> {
+// with the first message that ends the run. hosts defaults to url's own
+// host (the normal case: the page is on an allowed host); tests of the
+// SDK's own host guard pass a hosts list that does not include url's host,
+// or an http: url, and expect run() to time out (nothing is ever posted,
+// because the SDK's first statement returns before the collector body, or
+// even the nonce, is touched).
+async function run(
+  collector: string, html: string, url: string, input: object, setup?: (w: any) => void,
+  hosts?: string[], maxWaitMs = 5000,
+): Promise<Posted> {
   const dom = new JSDOM(html, { url, runScripts: "outside-only" });
   const w = dom.window as any;
   const posted: Posted[] = [];
@@ -20,16 +28,18 @@ async function run(collector: string, html: string, url: string, input: object, 
   const script = read("internal/collect/sdk.js")
     .replace("__RUN__", () => '"r1"')
     .replace("__NONCE__", () => '"n1"')
+    .replace("__HOSTS__", () => JSON.stringify(hosts ?? [new URL(url).hostname]))
     .replace("__INPUT__", () => JSON.stringify(input))
     .replace("__COLLECTOR__", () => read(`collectors/${collector}/collector.js`));
   w.eval(script);
-  for (let i = 0; i < 200; i++) {
+  const step = 25;
+  for (let i = 0; i < maxWaitMs / step; i++) {
     const end = posted.find((m) => m.kind !== "log");
     if (end) {
       dom.window.close();
       return end;
     }
-    await new Promise((r) => setTimeout(r, 25));
+    await new Promise((r) => setTimeout(r, step));
   }
   dom.window.close();
   throw new Error("the collector posted nothing");
@@ -117,5 +127,28 @@ describe("google-trends", () => {
       });
     expect(m.kind).toBe("error");
     expect(m.data.message).toBe("谷歌趋势限流了，稍后再试");
+  });
+});
+
+describe("the SDK's own host guard", () => {
+  // The SDK's very first statement checks location.protocol and
+  // location.hostname before touching the nonce or running the collector
+  // body, so a page that ends up somewhere the run never declared (a
+  // redirect, a stale re-injection after the window moved on) can't do
+  // anything with it: nothing is ever posted, so run() times out.
+  it("refuses to run on a host the run did not declare", async () => {
+    await expect(run("google-serp", "<div id=\"main\"></div>", "https://evil.example.com/search?q=x", serpInput,
+      undefined, ["www.google.com"], 200)).rejects.toThrow("the collector posted nothing");
+  });
+
+  it("refuses to run over plain http even on an allowed host", async () => {
+    await expect(run("google-serp", "<div id=\"main\"></div>", "http://www.google.com/search?q=x", serpInput,
+      undefined, ["www.google.com"], 200)).rejects.toThrow("the collector posted nothing");
+  });
+
+  it("runs normally once the page is https on a declared host", async () => {
+    const html = `<div id="main"><div><a href="https://example.com/"><h3>Example</h3></a></div></div>`;
+    const m = await run("google-serp", html, "https://www.google.com/search?q=x", serpInput, undefined, ["www.google.com"], 500);
+    expect(m.kind).toBe("result");
   });
 });

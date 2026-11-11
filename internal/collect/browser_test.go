@@ -19,9 +19,19 @@ type fakeWindow struct {
 	loads chan string
 	js    []string
 	shown int
+	// preLoad, if set, runs synchronously inside Load before it signals
+	// loads, i.e. after Browser has installed this run's act in the slot
+	// but before Load marks it ready. Tests use this to simulate a stale
+	// navigation event arriving in that narrow window.
+	preLoad func(url string)
 }
 
-func (f *fakeWindow) Load(url string) { f.loads <- url }
+func (f *fakeWindow) Load(url string) {
+	if f.preLoad != nil {
+		f.preLoad(url)
+	}
+	f.loads <- url
+}
 func (f *fakeWindow) Inject(js string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -33,6 +43,12 @@ func (f *fakeWindow) Show() {
 	f.shown++
 }
 func (f *fakeWindow) Hide() {}
+
+func (f *fakeWindow) jsCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.js)
+}
 
 func (f *fakeWindow) lastJS() string {
 	f.mu.Lock()
@@ -233,5 +249,72 @@ func TestBrowserPoolWaits(t *testing.T) {
 	}
 	if h.news != 1 {
 		t.Fatalf("pool of 1 created %d windows", h.news)
+	}
+}
+
+func TestBrowserRejectsNonHTTPSPage(t *testing.T) {
+	h := newHarness(1)
+	p := page
+	p.URL = "http://www.google.com/search?q=x"
+	if _, err := h.b.Load(context.Background(), p); err == nil {
+		t.Fatal("a non-https page URL was accepted")
+	}
+	if h.news != 0 {
+		t.Fatalf("a window was created for a non-https page: %d", h.news)
+	}
+}
+
+// TestBrowserIgnoresNavigationBeforeLoadIsIssued simulates a stale
+// "finished navigating" event for a window's previous page (the boot
+// page, for a freshly created window) arriving in the narrow gap between
+// Browser installing a new run's act in the slot and actually telling the
+// window to navigate to the run's page.
+func TestBrowserIgnoresNavigationBeforeLoadIsIssued(t *testing.T) {
+	h := newHarness(1)
+	gotWindow := make(chan *fakeWindow, 1)
+	orig := h.b.New
+	h.b.New = func(name string) (Window, error) {
+		win, err := orig(name)
+		if err != nil {
+			return win, err
+		}
+		fw := win.(*fakeWindow)
+		fw.preLoad = func(string) { h.b.Navigated(name) }
+		gotWindow <- fw
+		return fw, nil
+	}
+	res := h.start(page)
+	w := <-gotWindow
+	<-w.loads // the real page URL; by now the stale preLoad Navigated call already ran
+	if n := w.jsCount(); n != 0 {
+		t.Fatalf("injected before Load finished: %d scripts", n)
+	}
+	h.b.Navigated("collector-1")
+	if n := w.jsCount(); n != 1 {
+		t.Fatalf("no injection once Load finished: %d scripts", n)
+	}
+	h.b.Handle("collector-1", msg(t, w, "result", `{}`), origin)
+	if r := <-res; r.err != nil {
+		t.Fatal(r.err)
+	}
+}
+
+// TestBrowserIgnoresLateNavigationAfterRelease simulates a stale event
+// for about:blank (loaded on release) arriving after the window has
+// already been returned to the pool.
+func TestBrowserIgnoresLateNavigationAfterRelease(t *testing.T) {
+	h := newHarness(1)
+	res := h.start(page)
+	w, _ := h.waitLoad(t, "collector-1")
+	h.b.Navigated("collector-1")
+	h.b.Handle("collector-1", msg(t, w, "result", `{}`), origin)
+	if r := <-res; r.err != nil {
+		t.Fatal(r.err)
+	}
+	h.waitLoad(t, "collector-1") // about:blank, loaded by release()
+	before := w.jsCount()
+	h.b.Navigated("collector-1") // a late event for about:blank, or the finished run
+	if after := w.jsCount(); after != before {
+		t.Fatalf("injected after release: %d -> %d", before, after)
 	}
 }

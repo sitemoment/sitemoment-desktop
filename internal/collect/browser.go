@@ -7,7 +7,9 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -68,6 +70,14 @@ type active struct {
 	msgs      chan Message
 	closed    chan struct{}
 	closeOnce sync.Once
+	// ready becomes true only after Load has told the window to navigate
+	// to this run's page. Navigated ignores events before that: a window
+	// freshly created for the pool, or one just released back to it with
+	// Load("about:blank"), can report a late "finished navigating" event
+	// for its previous page (the boot page, or about:blank) after this
+	// run's act has already been installed in the slot; injecting this
+	// run's script there would hand its nonce to the wrong page.
+	ready atomic.Bool
 }
 
 func (b *Browser) init() {
@@ -133,7 +143,12 @@ func (b *Browser) release(s *slot) {
 }
 
 // Load opens p.URL in a free window and waits for the collector's result.
+// p.URL must be https: Browser never asks a window to navigate, and so
+// never has a reason to inject a run's script, anywhere else.
 func (b *Browser) Load(ctx context.Context, p Page) (json.RawMessage, error) {
+	if !strings.HasPrefix(p.URL, "https://") {
+		return nil, errors.New("collect: page URL is not https")
+	}
 	s, err := b.acquire(ctx)
 	if err != nil {
 		return nil, err
@@ -145,6 +160,7 @@ func (b *Browser) Load(ctx context.Context, p Page) (json.RawMessage, error) {
 	s.act = act
 	b.mu.Unlock()
 	s.w.Load(p.URL)
+	act.ready.Store(true)
 
 	timeout, human := p.Timeout, p.HumanTimeout
 	if timeout <= 0 {
@@ -219,9 +235,12 @@ func (b *Browser) activeIn(window string) (*slot, *active) {
 }
 
 // Navigated injects the active run's script after window finished loading
-// a page (also after a redirect or a solved check reloads it).
+// a page (also after a redirect or a solved check reloads it). Events for
+// a window with no active run (never loaded one, or already released) are
+// ignored, as are events that arrive before Load has told this run's
+// window to navigate anywhere (see active.ready).
 func (b *Browser) Navigated(window string) {
-	if s, act := b.activeIn(window); act != nil {
+	if s, act := b.activeIn(window); act != nil && act.ready.Load() {
 		s.w.Inject(act.script)
 	}
 }
