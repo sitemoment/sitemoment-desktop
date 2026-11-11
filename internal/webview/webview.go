@@ -102,6 +102,9 @@ func (ws *Windows) New(name string) (collect.Window, error) {
 
 // RawMessage is the app's RawMessageHandler: messages from collector
 // windows' main frames go to the Browser, everything else is ignored.
+// Whether a message is from the main frame (as opposed to an iframe the
+// collector's page embeds) is checked by isMainFrame, which differs by
+// platform: see mainframe_darwin.go and mainframe_fallback.go.
 func (ws *Windows) RawMessage(w application.Window, msg string, o *application.OriginInfo) {
 	name := w.Name()
 	if !strings.HasPrefix(name, windowPrefix) {
@@ -109,7 +112,7 @@ func (ws *Windows) RawMessage(w application.Window, msg string, o *application.O
 	}
 	origin := ""
 	if o != nil {
-		if !o.IsMainFrame {
+		if !isMainFrame(o) {
 			return
 		}
 		origin = o.Origin
