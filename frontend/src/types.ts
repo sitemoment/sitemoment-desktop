@@ -132,3 +132,7 @@ export interface UpdateStatus {
   current: string; state: UpdateState; reason?: string; latest?: UpdateVersion | null;
   written: number; total: number; stage?: string; error?: string; checkedAt: number; auto: boolean;
 }
+
+// Notifications (internal/app.Note, NotifySettings).
+export interface Note { title: string; body: string; kind: "human" | "notice" | "update" | "info" }
+export interface NotifySettings { native: boolean; available: boolean; reason?: string }

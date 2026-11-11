@@ -4,6 +4,8 @@ import { api, errText, signedOut, type Cancellable } from "../api";
 import { ModelSettingsPanel } from "../components/ModelSettings";
 import { fmtBytes } from "../format";
 import { UpdatePanel } from "../components/UpdatePanel";
+import { NotifyPanel } from "../components/NotifyPanel";
+import { PrivacyPanel } from "../components/PrivacyPanel";
 import type { Account, Connection, Info, Site } from "../types";
 
 // WKWebView (Wails' macOS webview) has no WKUIDelegate hookup for the JS
@@ -131,6 +133,8 @@ export function SettingsPage(props: {
         ))}
       </section>
       <UpdatePanel />
+      <NotifyPanel />
+      <PrivacyPanel />
       <section className="panel">
         <h2>本机数据</h2>
         <dl>

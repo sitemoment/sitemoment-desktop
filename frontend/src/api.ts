@@ -10,6 +10,8 @@ import type {
 } from "./types";
 import { Service as UpdateService } from "../bindings/github.com/sitemoment/sitemoment-desktop/internal/updates";
 import type { UpdateStatus } from "./types";
+import { NotifyService } from "../bindings/github.com/sitemoment/sitemoment-desktop/internal/app";
+import type { NotifySettings } from "./types";
 
 // The generated bindings (typed via `wails3 generate bindings -ts -i`) return
 // CancellablePromise of generated model types that are structurally the same
@@ -67,6 +69,9 @@ export const api = {
   installUpdate: () => call<void>(UpdateService.Install()),
   restartToUpdate: () => call<void>(UpdateService.Restart()),
   setAutoUpdate: (on: boolean) => call<UpdateStatus>(UpdateService.SetAuto(on)),
+  notifySettings: () => call<NotifySettings>(NotifyService.Get()),
+  setNativeNotify: (on: boolean) => call<NotifySettings>(NotifyService.SetNative(on)),
+  testNotify: () => call<void>(NotifyService.Test()),
   sessions: (siteId: number) => call<SessionView[]>(AgentService.Sessions(siteId)),
   createSession: (siteId: number) => call<SessionView>(AgentService.Create(siteId)),
   deleteSession: (id: number) => call<void>(AgentService.Delete(id)),
