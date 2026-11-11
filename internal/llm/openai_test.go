@@ -61,6 +61,17 @@ func sse(chunks ...string) func(w http.ResponseWriter) {
 	}
 }
 
+// sseNoDone writes chunks as server-sent events and then just closes the
+// connection, the way some servers do instead of sending [DONE].
+func sseNoDone(chunks ...string) func(w http.ResponseWriter) {
+	return func(w http.ResponseWriter) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		for _, c := range chunks {
+			fmt.Fprintf(w, "data: %s\n\n", c)
+		}
+	}
+}
+
 func status(code int, body string) func(w http.ResponseWriter) {
 	return func(w http.ResponseWriter) {
 		w.Header().Set("Content-Type", "application/json")
@@ -258,6 +269,94 @@ func TestOpenAIStreamError(t *testing.T) {
 	p := &OpenAI{BaseURL: base, Model: "m"}
 	if _, err := p.Chat(ctx, Request{Messages: []Message{{Role: "user", Content: "x"}}}, nil); err == nil || !strings.Contains(err.Error(), "upstream overloaded") {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestOpenAICutStreamWithoutFinishReasonIsError(t *testing.T) {
+	_, base := newFake(t, sseNoDone(`{"choices":[{"index":0,"delta":{"content":"部分"}}]}`))
+	p := &OpenAI{BaseURL: base, Model: "m"}
+	_, err := p.Chat(ctx, Request{Messages: []Message{{Role: "user", Content: "x"}}}, nil)
+	if err == nil || !strings.Contains(err.Error(), "中断") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestOpenAICutStreamWithFinishReasonIsComplete(t *testing.T) {
+	_, base := newFake(t, sseNoDone(
+		`{"choices":[{"index":0,"delta":{"content":"完整回答"}}]}`,
+		`{"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`,
+	))
+	p := &OpenAI{BaseURL: base, Model: "m"}
+	r, err := p.Chat(ctx, Request{Messages: []Message{{Role: "user", Content: "x"}}}, nil)
+	if err != nil || r.Content != "完整回答" || r.FinishReason != "stop" {
+		t.Fatalf("reply %+v, %v", r, err)
+	}
+}
+
+func TestOpenAIRejectsEndlessLine(t *testing.T) {
+	_, base := newFake(t, func(w http.ResponseWriter) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		io.WriteString(w, "data: ")
+		// Never terminated with \n: a single line over the 1 MiB cap.
+		io.WriteString(w, strings.Repeat("x", (1<<20)+10))
+	})
+	p := &OpenAI{BaseURL: base, Model: "m"}
+	_, err := p.Chat(ctx, Request{Messages: []Message{{Role: "user", Content: "x"}}}, nil)
+	if err == nil || !strings.Contains(err.Error(), "太长") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestOpenAIRejectsHugeAccumulatedReply(t *testing.T) {
+	_, base := newFake(t, func(w http.ResponseWriter) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		chunk := strings.Repeat("a", 900<<10) // 900 KiB of content, under the 1 MiB line cap
+		for i := 0; i < 10; i++ {             // 10 * 900 KiB ≈ 8.8 MiB, over the 8 MiB accumulated cap
+			b, _ := json.Marshal(map[string]any{"choices": []map[string]any{{"index": 0, "delta": map[string]any{"content": chunk}}}})
+			fmt.Fprintf(w, "data: %s\n\n", b)
+		}
+	})
+	p := &OpenAI{BaseURL: base, Model: "m"}
+	_, err := p.Chat(ctx, Request{Messages: []Message{{Role: "user", Content: "x"}}}, nil)
+	if err == nil || !strings.Contains(err.Error(), "太长") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestOpenAIRejectsHugeRawStream(t *testing.T) {
+	_, base := newFake(t, func(w http.ResponseWriter) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		pad := strings.Repeat("p", 60<<10) // padding keeps each line well under the 1 MiB line cap
+		for i := 0; i < 300; i++ {         // 300 * ~60 KiB ≈ 17.6 MiB, over the 16 MiB whole-stream cap
+			fmt.Fprintf(w, "data: {\"_pad\":\"%s\",\"choices\":[{\"index\":0,\"delta\":{}}]}\n\n", pad)
+		}
+	})
+	p := &OpenAI{BaseURL: base, Model: "m"}
+	_, err := p.Chat(ctx, Request{Messages: []Message{{Role: "user", Content: "x"}}}, nil)
+	if err == nil || !strings.Contains(err.Error(), "太长") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestOpenAIRedactsHostedToken(t *testing.T) {
+	_, base := newFake(t, status(500, `{"error":{"message":"bad token acc-secret-xyz"}}`))
+	p := &OpenAI{URL: base + "/v1/chat/completions", Model: "m", Auth: func(_ context.Context, _ bool) (string, error) { return "acc-secret-xyz", nil }}
+	_, err := p.Chat(ctx, Request{Messages: []Message{{Role: "user", Content: "x"}}}, nil)
+	if err == nil || strings.Contains(err.Error(), "acc-secret-xyz") || !strings.Contains(err.Error(), "HTTP 500") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestOpenAIDecodesWholeReplyWithWrongContentType(t *testing.T) {
+	_, base := newFake(t, func(w http.ResponseWriter) {
+		// No Content-Type set: Go sniffs this as text/plain, but the server
+		// ignored "stream" and answered with a whole completion anyway.
+		fmt.Fprint(w, `{"choices":[{"message":{"content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":5,"completion_tokens":2}}`)
+	})
+	p := &OpenAI{BaseURL: base, Model: "m"}
+	r, err := p.Chat(ctx, Request{Messages: []Message{{Role: "user", Content: "x"}}}, nil)
+	if err != nil || r.Content != "ok" || r.FinishReason != "stop" || r.Usage != (Usage{5, 2}) {
+		t.Fatalf("reply %+v, %v", r, err)
 	}
 }
 

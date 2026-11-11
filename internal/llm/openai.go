@@ -20,6 +20,38 @@ import (
 // takes, and the caller bounds a call with its context.
 var defaultHTTP = &http.Client{}
 
+// Limits on one reply, so a runaway or malicious server cannot grow memory
+// without bound: the whole response body, one SSE line, and the streamed
+// text plus tool-call arguments decoded from it.
+const (
+	maxStreamBytes       = 16 << 20
+	maxStreamLine        = 1 << 20
+	maxStreamAccumulated = 8 << 20
+)
+
+// errStreamTooLarge marks a response that exceeded maxStreamBytes.
+var errStreamTooLarge = errors.New("llm: stream too large")
+
+// limitedReader is like io.LimitReader but reports errStreamTooLarge instead
+// of a quiet EOF once the limit is reached, so the caller can tell a
+// legitimately finished stream from one that was cut off for being too big.
+type limitedReader struct {
+	r io.Reader
+	n int64
+}
+
+func (l *limitedReader) Read(p []byte) (int, error) {
+	if l.n <= 0 {
+		return 0, errStreamTooLarge
+	}
+	if int64(len(p)) > l.n {
+		p = p[:l.n]
+	}
+	n, err := l.r.Read(p)
+	l.n -= int64(n)
+	return n, err
+}
+
 // OpenAI is an OpenAI-compatible chat completions server: SiteMoment's
 // hosted model (URL + Auth) or one the user brings (BaseURL + Key).
 type OpenAI struct {
@@ -54,12 +86,16 @@ func (p *OpenAI) Label() string {
 // NativeTools reports whether the server accepted the `tools` field so far.
 func (p *OpenAI) NativeTools() bool { return !p.jsonProtocol.Load() }
 
+// reVersionSuffix matches a base URL that already ends in an API version
+// segment, e.g. "https://openrouter.ai/api/v1".
+var reVersionSuffix = regexp.MustCompile(`/v\d+$`)
+
 func completionsURL(base string) string {
 	b := strings.TrimRight(base, "/")
 	switch {
 	case strings.HasSuffix(b, "/chat/completions"):
 		return b
-	case regexp.MustCompile(`/v\d+$`).MatchString(b):
+	case reVersionSuffix.MatchString(b):
 		return b + "/chat/completions"
 	default:
 		return b + "/v1/chat/completions"
@@ -158,12 +194,9 @@ func (p *OpenAI) stream(ctx context.Context, body map[string]any, onText func(st
 		}
 		if res.StatusCode >= 200 && res.StatusCode < 300 {
 			defer res.Body.Close()
-			if strings.HasPrefix(res.Header.Get("Content-Type"), "application/json") {
-				return p.decodeWhole(res)
-			}
-			return p.readEvents(ctx, res.Body, onText)
+			return p.readReply(ctx, res, tok, onText)
 		}
-		e := p.errorOf(res)
+		e := p.errorOf(res, tok)
 		switch {
 		case res.StatusCode == http.StatusUnauthorized && p.Auth != nil && !refreshed:
 			refreshed = true
@@ -207,14 +240,16 @@ func (p *OpenAI) post(ctx context.Context, body map[string]any, token string) (*
 		if errors.As(err, &ue) {
 			err = ue.Err // drop the URL that *url.Error prepends
 		}
-		return nil, &Error{Msg: "request failed: " + p.redact(err.Error())}
+		return nil, &Error{Msg: "request failed: " + p.redact(err.Error(), token)}
 	}
 	return res, nil
 }
 
 // errorOf reads an error response: {"error":{"code","message"}} (OpenAI and
-// SiteMoment) or {"error":"..."}; anything else is shown truncated.
-func (p *OpenAI) errorOf(res *http.Response) *Error {
+// SiteMoment) or {"error":"..."}; anything else is shown truncated. tok is
+// the bearer token used for this request, scrubbed from the message in case
+// a misbehaving server echoes it back.
+func (p *OpenAI) errorOf(res *http.Response, tok string) *Error {
 	defer res.Body.Close()
 	text, _ := io.ReadAll(io.LimitReader(res.Body, 64<<10))
 	var obj struct {
@@ -238,7 +273,30 @@ func (p *OpenAI) errorOf(res *http.Response) *Error {
 	if msg == "" {
 		msg = truncate(string(text), 300)
 	}
-	return &Error{Status: res.StatusCode, Code: code, Msg: fmt.Sprintf("HTTP %d: %s", res.StatusCode, p.redact(truncate(msg, 300)))}
+	return &Error{Status: res.StatusCode, Code: code, Msg: fmt.Sprintf("HTTP %d: %s", res.StatusCode, p.redact(truncate(msg, 300), tok))}
+}
+
+// readReply decodes a successful response, streamed or not. tok is the
+// bearer token used for the request (for redacting it out of any error).
+func (p *OpenAI) readReply(ctx context.Context, res *http.Response, tok string, onText func(string)) (*Reply, error) {
+	if strings.HasPrefix(res.Header.Get("Content-Type"), "application/json") {
+		return p.decodeWhole(res.StatusCode, res.Body)
+	}
+	br := bufio.NewReaderSize(res.Body, 64<<10)
+	if b, err := br.Peek(1); err == nil && len(b) > 0 && b[0] == '{' {
+		// Some servers ignore "stream" and answer with a whole JSON object
+		// without declaring application/json; read it all and try that
+		// before falling back to SSE parsing.
+		raw, _ := io.ReadAll(io.LimitReader(br, maxStreamBytes+1))
+		if len(raw) > maxStreamBytes {
+			return nil, &Error{Msg: "模型回复太长，已中止"}
+		}
+		if r, err2 := p.decodeWhole(res.StatusCode, bytes.NewReader(raw)); err2 == nil {
+			return r, nil
+		}
+		return p.readEvents(ctx, bytes.NewReader(raw), tok, onText)
+	}
+	return p.readEvents(ctx, br, tok, onText)
 }
 
 type wireDelta struct {
@@ -301,53 +359,77 @@ func (c *calls) add(d wireDelta) {
 	tc.Function.Arguments += d.Function.Arguments
 }
 
-// readEvents reads `data: {chunk}` lines until `data: [DONE]` or EOF.
-func (p *OpenAI) readEvents(ctx context.Context, body io.Reader, onText func(string)) (*Reply, error) {
-	rd := bufio.NewReaderSize(body, 64<<10)
+// readEvents reads `data: {chunk}` lines until `data: [DONE]` or EOF. It
+// caps the whole body (maxStreamBytes), one line (maxStreamLine) and the
+// accumulated text plus tool-call arguments (maxStreamAccumulated), and
+// treats a body that ends without [DONE] and without a finish_reason as a
+// cut-off stream rather than a complete answer. tok is the bearer token
+// used for the request (for redacting it out of any error).
+func (p *OpenAI) readEvents(ctx context.Context, body io.Reader, tok string, onText func(string)) (*Reply, error) {
+	sc := bufio.NewScanner(&limitedReader{r: body, n: maxStreamBytes})
+	sc.Buffer(make([]byte, 0, 64<<10), maxStreamLine)
 	var text strings.Builder
 	var acc calls
+	accLen := 0
 	r := &Reply{}
-	for {
-		line, err := rd.ReadString('\n')
-		if data, ok := strings.CutPrefix(strings.TrimSpace(line), "data:"); ok {
-			data = strings.TrimSpace(data)
-			if data == "[DONE]" {
-				break
+	done := false
+	for sc.Scan() {
+		line := sc.Text()
+		data, ok := strings.CutPrefix(strings.TrimSpace(line), "data:")
+		if !ok {
+			continue
+		}
+		data = strings.TrimSpace(data)
+		if data == "[DONE]" {
+			done = true
+			break
+		}
+		var ch wireChunk
+		if json.Unmarshal([]byte(data), &ch) != nil {
+			continue
+		}
+		if ch.Error != nil {
+			return nil, &Error{Msg: "stream error: " + p.redact(truncate(ch.Error.Message, 300), tok)}
+		}
+		if ch.Usage != nil {
+			r.Usage = Usage{InputTokens: ch.Usage.PromptTokens, OutputTokens: ch.Usage.CompletionTokens}
+		}
+		if len(ch.Choices) == 0 {
+			continue
+		}
+		c := ch.Choices[0]
+		if c.Delta.Content != nil && *c.Delta.Content != "" {
+			accLen += len(*c.Delta.Content)
+			if accLen > maxStreamAccumulated {
+				return nil, &Error{Msg: "模型回复太长，已中止"}
 			}
-			var ch wireChunk
-			if json.Unmarshal([]byte(data), &ch) == nil {
-				if ch.Error != nil {
-					return nil, &Error{Msg: "stream error: " + p.redact(truncate(ch.Error.Message, 300))}
-				}
-				if ch.Usage != nil {
-					r.Usage = Usage{InputTokens: ch.Usage.PromptTokens, OutputTokens: ch.Usage.CompletionTokens}
-				}
-				if len(ch.Choices) > 0 {
-					c := ch.Choices[0]
-					if c.Delta.Content != nil && *c.Delta.Content != "" {
-						text.WriteString(*c.Delta.Content)
-						if onText != nil {
-							onText(*c.Delta.Content)
-						}
-					}
-					for _, d := range c.Delta.ToolCalls {
-						acc.add(d)
-					}
-					if c.FinishReason != nil && *c.FinishReason != "" {
-						r.FinishReason = *c.FinishReason
-					}
-				}
+			text.WriteString(*c.Delta.Content)
+			if onText != nil {
+				onText(*c.Delta.Content)
 			}
 		}
-		if err != nil {
-			if ctx.Err() != nil {
-				return nil, ctx.Err()
+		for _, d := range c.Delta.ToolCalls {
+			accLen += len(d.Function.Arguments)
+			if accLen > maxStreamAccumulated {
+				return nil, &Error{Msg: "模型回复太长，已中止"}
 			}
-			if errors.Is(err, io.EOF) {
-				break
-			}
-			return nil, &Error{Msg: "stream interrupted: " + err.Error()}
+			acc.add(d)
 		}
+		if c.FinishReason != nil && *c.FinishReason != "" {
+			r.FinishReason = *c.FinishReason
+		}
+	}
+	if err := sc.Err(); err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		if errors.Is(err, bufio.ErrTooLong) || errors.Is(err, errStreamTooLarge) {
+			return nil, &Error{Msg: "模型回复太长，已中止"}
+		}
+		return nil, &Error{Msg: "stream interrupted: " + p.redact(err.Error(), tok)}
+	}
+	if !done && r.FinishReason == "" {
+		return nil, &Error{Msg: "模型回复中断"}
 	}
 	r.Content = text.String()
 	for _, tc := range acc.list {
@@ -357,8 +439,11 @@ func (p *OpenAI) readEvents(ctx context.Context, body io.Reader, onText func(str
 }
 
 // decodeWhole reads a non-streamed completion (a server that ignored stream).
-func (p *OpenAI) decodeWhole(res *http.Response) (*Reply, error) {
-	text, _ := io.ReadAll(io.LimitReader(res.Body, 8<<20))
+func (p *OpenAI) decodeWhole(status int, body io.Reader) (*Reply, error) {
+	text, _ := io.ReadAll(io.LimitReader(body, maxStreamBytes+1))
+	if len(text) > maxStreamBytes {
+		return nil, &Error{Status: status, Msg: "模型回复太长，已中止"}
+	}
 	var out struct {
 		Choices []struct {
 			Message struct {
@@ -373,7 +458,7 @@ func (p *OpenAI) decodeWhole(res *http.Response) (*Reply, error) {
 		} `json:"usage"`
 	}
 	if err := json.Unmarshal(text, &out); err != nil || len(out.Choices) == 0 {
-		return nil, &Error{Status: res.StatusCode, Msg: "response has no choices"}
+		return nil, &Error{Status: status, Msg: "response has no choices"}
 	}
 	ch := out.Choices[0]
 	r := &Reply{ToolCalls: ch.Message.ToolCalls, FinishReason: ch.FinishReason,
@@ -483,13 +568,16 @@ func parseJSONReply(text string) *Reply {
 	return &Reply{Content: text, FinishReason: "stop"}
 }
 
+// reJSONFence matches a ```json ... ``` (or plain ```) fenced code block.
+var reJSONFence = regexp.MustCompile("(?s)```(?:json)?\\s*\\n(.*?)\\n```")
+
 // extractJSON finds the whole text, a ```json fence, or the first balanced {...} that parses.
 func extractJSON(text string) (string, bool) {
 	t := strings.TrimSpace(text)
 	if json.Valid([]byte(t)) && strings.HasPrefix(t, "{") {
 		return t, true
 	}
-	if m := regexp.MustCompile("(?s)```(?:json)?\\s*\\n(.*?)\\n```").FindStringSubmatch(t); m != nil && json.Valid([]byte(m[1])) {
+	if m := reJSONFence.FindStringSubmatch(t); m != nil && json.Valid([]byte(m[1])) {
 		return m[1], true
 	}
 	start := strings.IndexByte(t, '{')
@@ -528,11 +616,19 @@ func extractJSON(text string) (string, bool) {
 	return "", false
 }
 
-func (p *OpenAI) redact(s string) string {
-	if p.Key == "" {
-		return s
+// redact strips p.Key (a key the user typed in) and any tokens passed in
+// (the hosted model's access token, fetched fresh for each request rather
+// than stored on p) from s, so neither ever reaches a stored error message.
+func (p *OpenAI) redact(s string, tokens ...string) string {
+	if p.Key != "" {
+		s = strings.ReplaceAll(s, p.Key, "***")
 	}
-	return strings.ReplaceAll(s, p.Key, "***")
+	for _, tok := range tokens {
+		if tok != "" {
+			s = strings.ReplaceAll(s, tok, "***")
+		}
+	}
+	return s
 }
 
 func truncate(s string, n int) string {
