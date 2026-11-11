@@ -83,6 +83,8 @@ export const errText = (e: unknown) => {
   if (msg.includes("credits_exhausted")) return "本月额度已用完";
   if (msg.includes("request_too_large")) return "这次请求太大，请减少关键词数量";
   if (msg.includes("data_budget")) return "数据服务今天的总额度已用完，请明天再试";
+  if (msg.includes("rate_limited")) return "今天的数据请求次数已用完，请明天再试";
+  if (msg.includes("too_many_requests")) return "请等上一个取数完成";
   if (isNetworkError(msg)) return "网络连接失败，请检查网络";
   return msg;
 };

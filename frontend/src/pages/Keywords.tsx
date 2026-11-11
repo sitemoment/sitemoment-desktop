@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api, errText } from "../api";
 import { fmtCredits, fmtInt, kdClass, kindLabel, metricNote } from "../format";
 import type { Account, CloudQuote, Keyword, KeywordKind, KeywordList, Site } from "../types";
@@ -20,13 +20,27 @@ export function KeywordsPage({ site, account, onCreditsUsed }: { site: Site; acc
   const [busy, setBusy] = useState("");
   const [note, setNote] = useState("");
   const [err, setErr] = useState("");
-  const [quote, setQuote] = useState<CloudQuote | null>(null);
+  // The ids are captured together with the quote: the live selection can
+  // change (or be cleared) while the confirm dialog is open, but the fetch
+  // must charge for exactly the keywords that were quoted.
+  const [quote, setQuote] = useState<{ quote: CloudQuote; ids: number[] } | null>(null);
+  // run() can be called twice from two synchronous click events (e.g. a fast
+  // double-click) before the `busy` state update has re-rendered the button
+  // as disabled; a ref is checked and set synchronously so the second call
+  // bails out immediately instead of starting a second paid fetch.
+  const busyRef = useRef(false);
+  // Guards a reload() whose site/kind changed (or whose component unmounted)
+  // before the request came back, so a stale response can't clobber newer
+  // state (e.g. rapidly switching the kind filter).
+  const reloadEpoch = useRef(0);
 
   const reload = useCallback(async () => {
+    const epoch = ++reloadEpoch.current;
     try {
-      setList(await api.keywords(site.id, kind));
+      const l = await api.keywords(site.id, kind);
+      if (reloadEpoch.current === epoch) setList(l);
     } catch (e) {
-      setErr(errText(e));
+      if (reloadEpoch.current === epoch) setErr(errText(e));
     }
   }, [site.id, kind]);
   useEffect(() => {
@@ -45,6 +59,8 @@ export function KeywordsPage({ site, account, onCreditsUsed }: { site: Site; acc
   const ids = () => [...selected];
 
   const run = async (what: string, fn: () => Promise<void>) => {
+    if (busyRef.current) return;
+    busyRef.current = true;
     setBusy(what);
     setErr("");
     setNote("");
@@ -53,6 +69,7 @@ export function KeywordsPage({ site, account, onCreditsUsed }: { site: Site; acc
     } catch (e) {
       setErr(errText(e));
     } finally {
+      busyRef.current = false;
       setBusy("");
     }
   };
@@ -67,10 +84,15 @@ export function KeywordsPage({ site, account, onCreditsUsed }: { site: Site; acc
     setNote(`Bing：更新 ${r.updated} 个词${r.skipped ? `，${r.skipped} 个没有数据或已有 SiteMoment 数据` : ""}`);
     await reload();
   });
-  const askCloud = () => run("quote", async () => setQuote(await api.quoteCloud(site.id, ids())));
+  const askCloud = () => run("quote", async () => {
+    const chosen = ids();
+    setQuote({ quote: await api.quoteCloud(site.id, chosen), ids: chosen });
+  });
   const fetchCloud = () => run("cloud", async () => {
+    if (!quote) return;
+    const chosen = quote.ids;
     setQuote(null);
-    const r = await api.fetchCloud(site.id, ids());
+    const r = await api.fetchCloud(site.id, chosen);
     setNote(`SiteMoment：更新 ${r.updated} 个词${r.skipped ? `，${r.skipped} 个没有数据` : ""}，扣 ${fmtCredits(r.credits)} 积分${r.cached ? "（缓存命中）" : ""}`);
     onCreditsUsed();
     await reload();
@@ -126,7 +148,7 @@ export function KeywordsPage({ site, account, onCreditsUsed }: { site: Site; acc
             <table className="qtable kwtable">
               <thead>
                 <tr>
-                  <th><input type="checkbox" checked={allOn} onChange={toggleAll} aria-label="全选" /></th>
+                  <th><input type="checkbox" checked={allOn} onChange={toggleAll} disabled={!!busy} aria-label="全选" /></th>
                   <th>关键词</th><th>类型</th>
                   <th className="num">GSC 排名</th><th className="num">展示</th>
                   <th className="num">搜索量</th><th className="num">KD</th><th className="num">CPC</th>
@@ -136,7 +158,7 @@ export function KeywordsPage({ site, account, onCreditsUsed }: { site: Site; acc
               <tbody>
                 {rows.map((k) => (
                   <tr key={k.id}>
-                    <td><input type="checkbox" checked={selected.has(k.id)} onChange={() => toggle(k.id)} aria-label={`选择 ${k.keyword}`} /></td>
+                    <td><input type="checkbox" checked={selected.has(k.id)} onChange={() => toggle(k.id)} disabled={!!busy} aria-label={`选择 ${k.keyword}`} /></td>
                     <td>{k.keyword}</td>
                     <td>
                       <select className={`tag tag-${k.kind}`} value={k.kind} disabled={!!busy} onChange={(e) => setKindOf(k, e.target.value as KeywordKind)}>
@@ -168,15 +190,15 @@ export function KeywordsPage({ site, account, onCreditsUsed }: { site: Site; acc
         <div className="modal" onClick={() => setQuote(null)}>
           <div className="modal-box" onClick={(e) => e.stopPropagation()}>
             <h3>用 SiteMoment 数据取数</h3>
-            <p>{quote.label}：{quote.keywords} 个词的搜索量、KD、CPC（美国市场）。只发送关键词，不发送你的 Search Console 数据。</p>
-            <p>{quote.cached ? "这些词都有缓存，这次不扣积分。" : `最多扣 ${fmtCredits(quote.maxCredits)} 积分，按实际扣费；缓存命中的部分不扣。`}</p>
+            <p>{quote.quote.label}：{quote.quote.keywords} 个词的搜索量、KD、CPC（美国市场）。只发送关键词，不发送你的 Search Console 数据。</p>
+            <p>{quote.quote.cached ? "这些词都有缓存，这次不扣积分。" : `最多扣 ${fmtCredits(quote.quote.maxCredits)} 积分，按实际扣费；缓存命中的部分不扣。`}</p>
             {account?.signedIn && account.creditsLimit > 0 && (
               <p className="mono">本月已用 {fmtCredits(account.creditsUsed)} / {fmtCredits(account.creditsLimit)}</p>
             )}
             <div className="row">
               <span className="grow" />
-              <button className="btn" onClick={() => setQuote(null)}>取消</button>
-              <button className="btn primary" onClick={fetchCloud}>确认取数</button>
+              <button className="btn" disabled={!!busy} onClick={() => setQuote(null)}>取消</button>
+              <button className="btn primary" disabled={!!busy} onClick={fetchCloud}>确认取数</button>
             </div>
           </div>
         </div>

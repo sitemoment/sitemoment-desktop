@@ -43,6 +43,10 @@ describe("errText", () => {
     expect(errText(new Error("cloud: HTTP 400 request_too_large: 这次请求太大，请减少关键词数量或 limit"))).toBe("这次请求太大，请减少关键词数量");
     expect(errText(new Error("cloud: SiteMoment data is not available right now (data_budget)"))).toBe("数据服务今天的总额度已用完，请明天再试");
   });
+  it("translates the 429 rate-limit error codes", () => {
+    expect(errText(new Error("cloud: HTTP 429 rate_limited: too many SERP lookups today"))).toBe("今天的数据请求次数已用完，请明天再试");
+    expect(errText(new Error("cloud: HTTP 429 too_many_requests: slow down"))).toBe("请等上一个取数完成");
+  });
   it("stringifies a non-Error value", () => {
     expect(errText("plain string")).toBe("plain string");
   });

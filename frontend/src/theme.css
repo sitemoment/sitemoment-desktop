@@ -57,8 +57,15 @@ main { flex: 1; min-width: 0; display: flex; flex-direction: column; background:
 .panel h2 { margin: 0 0 8px; font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--text-3); display: flex; justify-content: space-between; font-weight: 600; }
 .panel p { color: var(--text-2); }
 
-.kpis { grid-column: span 12; display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+/* No overflow:hidden here: a grid container that clips overflow gets an
+   automatic minimum row/column size of 0 (CSS Grid "automatic minimum size"
+   rule), which let this row collapse to a couple of pixels at some widths.
+   The corner tiles round themselves instead of relying on the container
+   clipping square corners. */
+.kpis { grid-column: span 12; display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: 8px; min-height: max-content; }
 .kpi { background: var(--surface-1); padding: 10px 12px; }
+.kpi:first-child { border-radius: 7px 0 0 7px; }
+.kpi:last-child { border-radius: 0 7px 7px 0; }
 .kpi-label { font-size: 11px; color: var(--text-3); display: flex; justify-content: space-between; }
 .kpi-value { font-family: var(--mono); font-size: 20px; }
 .kpi-foot { display: flex; justify-content: space-between; align-items: center; gap: 6px; }

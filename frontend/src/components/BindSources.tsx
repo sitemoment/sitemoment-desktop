@@ -32,10 +32,13 @@ function BindGA({ site, onChanged, onError }: Props) {
 
   useEffect(() => {
     if (!editing) return;
+    let live = true;
     api.connections().then((c) => {
+      if (!live) return;
       setConns(c);
       setAccount(site.gaAccount || site.googleAccount || c[0]?.account || "");
-    }).catch((e) => onError(errText(e)));
+    }).catch((e) => { if (live) onError(errText(e)); });
+    return () => { live = false; };
   }, [editing, site.gaAccount, site.googleAccount, onError]);
   useEffect(() => {
     if (!editing || !account) return;
@@ -104,10 +107,13 @@ function BindBing({ site, onChanged, onError }: Props) {
 
   useEffect(() => {
     if (!editing) return;
+    let live = true;
     api.bingKeys().then((k) => {
+      if (!live) return;
       setKeys(k);
       setAccount(site.bingAccount || k[0]?.account || "");
-    }).catch((e) => onError(errText(e)));
+    }).catch((e) => { if (live) onError(errText(e)); });
+    return () => { live = false; };
   }, [editing, site.bingAccount, onError]);
   useEffect(() => {
     if (!editing || !account) return;
