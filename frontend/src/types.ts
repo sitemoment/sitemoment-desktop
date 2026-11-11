@@ -89,3 +89,38 @@ export interface RunView {
 }
 export interface DayCount { collector: string; name: string; count: number; limit: number }
 export interface CollectorStats { running: number; queued: number; today: DayCount[] }
+
+// Health checks, tasks, reports and notices (internal/health, internal/tasks, internal/report; app.HealthService…).
+export type Severity = "p0" | "p1" | "p2";
+export interface Crawl {
+  id: number; siteId: number; origin: "schedule" | "manual"; status: "running" | "done" | "failed"; startedAt: number; finishedAt: number;
+  pages: number; okPages: number; score: number; p0: number; p1: number; p2: number; summary: string; error: string;
+}
+export interface Issue { crawlId: number; code: string; severity: Severity; title: string; detail: string; count: number; urls: string[]; new: boolean }
+export interface GSCWindow { from: string; to: string; prevFrom: string; prevTo: string; clicks: number; impressions: number; prevClicks: number; prevImpressions: number }
+export interface HealthSummary {
+  host: string; pages: number; ok: number; sitemapUrls: number; truncated: boolean; disallowed: number; rechecked: number;
+  gsc?: GSCWindow | null; inspected: number; inspectNote?: string;
+}
+export interface HealthView {
+  latest: Crawl | null; summary: HealthSummary; issues: Issue[]; last: Crawl | null; history: Crawl[]; running: boolean;
+}
+export interface SiteHealth { siteId: number; crawlId: number; score: number; p0: number; p1: number; p2: number; checkedAt: number }
+/** Payload of the "health:status" event. */
+export interface HealthStatus { siteId: number; state: "running" | "done" | "failed"; crawlId?: number; score?: number; error?: string }
+export type PageFilter = "all" | "error" | "noindex" | "redirect" | "not_indexed";
+export interface PageRow {
+  url: string; finalUrl: string; status: number; ok: boolean; title: string; canonical: string; noindex: boolean; inSitemap: boolean; error: string;
+  firstSeen: number; lastSeen: number; lastOk: number; indexVerdict: string; indexCoverage: string; indexCheckedAt: number;
+}
+export interface PageList { pages: PageRow[]; total: number }
+export type TaskStatus = "proposed" | "open" | "passed" | "failed" | "dismissed";
+export interface Outcome { state: "pass" | "unmet" | "pending"; current?: number | null; baseline?: number | null; note: string; at: number }
+export interface TaskView {
+  id: number; siteId: number; sessionId: number; title: string; detail: string; status: TaskStatus; days: number;
+  createdAt: number; startedAt: number; dueAt: number; checkedAt: number; doneAt: number;
+  labels: string[]; outcomes: Outcome[];
+}
+export interface Report { id: number; siteId: number; origin: "weekly" | "manual"; from: string; to: string; title: string; markdown: string; html: string; createdAt: number }
+export interface Notice { id: number; siteId: number; kind: string; title: string; body: string; ref: string; read: boolean; createdAt: number }
+export interface NoticeList { items: Notice[]; unread: number }

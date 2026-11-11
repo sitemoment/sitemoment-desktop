@@ -1,11 +1,12 @@
 import { Browser, Events, type CancellablePromise } from "@wailsio/runtime";
 import {
-  AccountService, AgentService, BingService, CollectorService, GoogleService, InfoService, KeywordService, ModelService, OverviewService,
-  SiteService, SyncService,
+  AccountService, AgentService, BingService, CollectorService, GoogleService, HealthService, InfoService, KeywordService, ModelService, NoticeService,
+  OverviewService, ReportService, SiteService, SyncService, TaskService,
 } from "../bindings/github.com/sitemoment/sitemoment-desktop/internal/app";
 import type {
-  Account, BingSite, CloudQuote, CollectorStats, CollectorView, Connection, FetchResult, GAProperty, Info, KeywordKind, KeywordList,
-  ModelSettings, Overview, Property, RunView, SessionView, Site, SpendMode, SyncStatus, Transcript,
+  Account, BingSite, CloudQuote, CollectorStats, CollectorView, Connection, FetchResult, GAProperty, HealthView, Info, KeywordKind, KeywordList,
+  ModelSettings, NoticeList, Overview, PageFilter, PageList, Property, Report, RunView, SessionView, Site, SiteHealth, SpendMode, SyncStatus,
+  TaskView, Transcript,
 } from "./types";
 
 // The generated bindings (typed via `wails3 generate bindings -ts -i`) return
@@ -84,6 +85,24 @@ export const api = {
   needsHuman: () => call<RunView[]>(CollectorService.NeedsHuman()),
   revealRun: (runId: number) => call<void>(CollectorService.Reveal(runId)),
   collectorStats: () => call<CollectorStats>(CollectorService.Stats()),
+  health: (siteId: number) => call<HealthView>(HealthService.Get(siteId)),
+  runHealth: (siteId: number) => call<void>(HealthService.Run(siteId)),
+  healthScores: () => call<SiteHealth[] | null>(HealthService.Scores()),
+  pages: (siteId: number, filter: PageFilter, contains: string) => call<PageList>(HealthService.Pages(siteId, filter, contains)),
+  tasks: (siteId: number) => call<TaskView[] | null>(TaskService.List(siteId)),
+  confirmTask: (id: number) => call<TaskView>(TaskService.Confirm(id)),
+  dismissTask: (id: number) => call<void>(TaskService.Dismiss(id)),
+  deleteTask: (id: number) => call<void>(TaskService.Delete(id)),
+  checkTask: (id: number) => call<TaskView>(TaskService.Check(id)),
+  autoAcceptTasks: () => call<boolean>(TaskService.AutoAccept()),
+  setAutoAcceptTasks: (on: boolean) => call<void>(TaskService.SetAutoAccept(on)),
+  reports: (siteId: number) => call<Report[] | null>(ReportService.List(siteId)),
+  report: (id: number) => call<Report>(ReportService.Get(id)),
+  generateReport: (siteId: number) => call<Report>(ReportService.Generate(siteId)),
+  exportReport: (id: number, format: "html" | "md") => call<string>(ReportService.Export(id, format)),
+  deleteReport: (id: number) => call<void>(ReportService.Delete(id)),
+  notices: () => call<NoticeList>(NoticeService.List()),
+  markNoticeRead: (id: number) => call<void>(NoticeService.MarkRead(id)),
 };
 
 /** Opens an http(s) link in the system browser; anything else is ignored. */

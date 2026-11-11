@@ -1,0 +1,28 @@
+CREATE TABLE tasks (
+  id INTEGER PRIMARY KEY,
+  site_id INTEGER NOT NULL REFERENCES sites(id) ON DELETE CASCADE,
+  session_id INTEGER REFERENCES agent_sessions(id) ON DELETE SET NULL,
+  title TEXT NOT NULL,
+  detail TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL,
+  conditions TEXT NOT NULL,
+  results TEXT NOT NULL DEFAULT '',
+  days INTEGER NOT NULL,
+  created_at INTEGER NOT NULL,
+  started_at INTEGER NOT NULL DEFAULT 0,
+  due_at INTEGER NOT NULL DEFAULT 0,
+  checked_at INTEGER NOT NULL DEFAULT 0,
+  done_at INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX tasks_site ON tasks(site_id, status);
+
+CREATE TABLE notices (
+  id INTEGER PRIMARY KEY,
+  site_id INTEGER REFERENCES sites(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL,
+  title TEXT NOT NULL,
+  body TEXT NOT NULL DEFAULT '',
+  ref TEXT NOT NULL DEFAULT '',
+  read INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL
+);

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
-  change, fmtBytes, fmtCompact, fmtCredits, fmtPct, guessBingSite, guessGAProperty, guessProperty, kdClass, metricNote, niceScale, nextHumanRun, posChange,
+  change, fmtBytes, fmtCompact, fmtCredits, fmtDate, fmtDateTime, fmtPct, guessBingSite, guessGAProperty, guessProperty, healthState, kdClass, metricNote,
+  niceScale, nextHumanRun, noticeTarget, outcomeText, posChange,
 } from "./format";
 import type { RunView } from "./types";
 
@@ -91,5 +92,29 @@ describe("nextHumanRun", () => {
   });
   it("keeps it when another run changes", () => {
     expect(nextHumanRun(run(1, "need_human"), run(2, "running"))?.id).toBe(1);
+  });
+});
+
+describe("health, tasks and notices", () => {
+  it("grades a health score", () => {
+    expect(healthState({ score: 92, p0: 0 })).toBe("good");
+    expect(healthState({ score: 78, p0: 0 })).toBe("warn");
+    expect(healthState({ score: 90, p0: 1 })).toBe("bad");
+  });
+  it("describes an outcome", () => {
+    expect(outcomeText(undefined)).toBe("待检查");
+    expect(outcomeText({ state: "unmet", current: 12.04, baseline: 14, note: "", at: 1 })).toBe("未达标（开始前 14 → 现在 12）");
+    expect(outcomeText({ state: "pending", note: "", at: 1 })).toBe("待数据");
+  });
+  it("routes notices", () => {
+    expect(noticeTarget("task:3")).toBe("tasks");
+    expect(noticeTarget("report:7")).toBe("reports");
+    expect(noticeTarget("crawl:2")).toBe("health");
+    expect(noticeTarget("")).toBeNull();
+  });
+  it("formats local dates", () => {
+    const t = new Date(2026, 10, 10, 8, 5).getTime() / 1000;
+    expect(fmtDateTime(t)).toBe("11-10 08:05");
+    expect(fmtDate(t)).toBe("2026-11-10");
   });
 });

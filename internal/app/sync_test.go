@@ -313,3 +313,19 @@ func TestSyncRunsEveryBoundSource(t *testing.T) {
 		t.Fatalf("calls gsc=%d ga=%d bing=%d", gsc.calls.Load(), ga.calls.Load(), bg.calls.Load())
 	}
 }
+
+func TestSyncCallsAfterWhenDone(t *testing.T) {
+	siteID, st := bindSite(t, "example.com")
+	after := make(chan int64, 1)
+	src := &fakeSource{name: "gsc", bound: true}
+	s := &SyncService{Sources: []Source{src}, Store: st, After: func(id int64) { after <- id }}
+	s.SyncNow(siteID)
+	select {
+	case id := <-after:
+		if id != siteID {
+			t.Fatalf("After(%d), want %d", id, siteID)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("After was not called")
+	}
+}

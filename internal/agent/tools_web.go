@@ -148,6 +148,7 @@ var severityLabel = map[string]string{rank.SeverityP0: "P0", rank.SeverityP1: "P
 
 // issueTitles are the Chinese card titles of rank.SiteIssues ids (the model also gets the English detail).
 var issueTitles = map[string]string{
+	"robots_server_error":         "robots.txt 返回服务器错误",
 	"robots_blocks_site":          "robots.txt 屏蔽了整站",
 	"no_sitemap":                  "没有找到 sitemap",
 	"sitemap_broken":              "sitemap 里有报错的页面",

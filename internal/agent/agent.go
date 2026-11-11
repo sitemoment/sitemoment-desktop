@@ -231,7 +231,7 @@ func (a *Agent) begin(sess store.AgentSession, model llm.Model) (context.Context
 	a.cancels[sess.ID] = t
 	a.mu.Unlock()
 	context.AfterFunc(ctx, stopTimer)
-	t.env = &Env{Deps: a.Deps}
+	t.env = &Env{Deps: a.Deps, SessionID: sess.ID}
 	if sess.SiteID != 0 {
 		if site, err := a.Store.Site(ctx, sess.SiteID); err == nil {
 			t.env.Site = site

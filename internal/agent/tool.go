@@ -72,6 +72,8 @@ type Deps struct {
 	Suggest    *webdata.Suggest
 	Collectors Collectors
 	Cloud      Cloud
+	// Tasks backs create_task and list_tasks (nil: they answer that tasks are unavailable).
+	Tasks Tasks
 	// CrawlPages caps site_crawl (default 150).
 	CrawlPages int
 	Now        func() time.Time
@@ -93,6 +95,8 @@ type Env struct {
 	*Deps
 	// Site is the session's site (ID 0 when the session has none).
 	Site store.Site
+	// SessionID is the session the call belongs to (create_task records it).
+	SessionID int64
 }
 
 func (d *Deps) now() time.Time {

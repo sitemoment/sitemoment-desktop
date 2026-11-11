@@ -23,10 +23,12 @@ import (
 	"github.com/sitemoment/sitemoment-desktop/internal/gasync"
 	"github.com/sitemoment/sitemoment-desktop/internal/google"
 	"github.com/sitemoment/sitemoment-desktop/internal/gscsync"
+	"github.com/sitemoment/sitemoment-desktop/internal/health"
 	"github.com/sitemoment/sitemoment-desktop/internal/paths"
 	"github.com/sitemoment/sitemoment-desktop/internal/rank"
 	"github.com/sitemoment/sitemoment-desktop/internal/secret"
 	"github.com/sitemoment/sitemoment-desktop/internal/store"
+	"github.com/sitemoment/sitemoment-desktop/internal/tasks"
 	"github.com/sitemoment/sitemoment-desktop/internal/webdata"
 	"github.com/sitemoment/sitemoment-desktop/internal/webview"
 	"github.com/wailsapp/wails/v3/pkg/application"
@@ -94,6 +96,9 @@ func main() {
 	if err := st.CancelUnfinishedCollectorRuns(ctx, now.Unix()); err != nil {
 		log.Fatal(err)
 	}
+	if err := st.AbortRunningCrawls(ctx, "应用退出，体检中断", time.Now().Unix()); err != nil {
+		log.Fatal(err)
+	}
 	if err := st.PruneCollectorRuns(ctx, now.Add(-runCacheRetention).Unix()); err != nil {
 		log.Fatal(err)
 	}
@@ -136,6 +141,22 @@ func main() {
 		Store: st, Emit: emit, Ctx: ctx,
 	}
 
+	fetcher := rank.NewFetcher(rank.DefaultFetcherConfig())
+	ops := &app.Ops{
+		Store: st, Emit: emit, Ctx: ctx,
+		Checker: &health.Checker{Store: st, Fetcher: fetcher, Inspector: app.GSCInspector{GSC: gsc, Tokens: tokens}},
+		Tasks:   &tasks.Service{Store: st, Fetcher: fetcher},
+	}
+	syncSvc.After = func(siteID int64) { ops.EvaluateTasks(ctx, siteID) }
+	// save asks where to export a report (the system save dialog, over the main window).
+	save := func(name string) (string, error) {
+		d := wapp.Dialog.SaveFile().SetFilename(name).CanCreateDirectories(true)
+		if w := mainWin.Load(); w != nil {
+			d.AttachToWindow(w)
+		}
+		return d.PromptForSingleSelection()
+	}
+
 	models := &app.Models{Store: st, Secrets: secrets, Cloud: cl, HTTP: streamHTTP}
 	browser := &collect.Browser{}
 	catalog := &collect.Catalog{Builtin: collectors.FS, Dir: filepath.Join(dir, "collectors"), Store: st, Reserved: agent.ReservedToolNames()}
@@ -149,12 +170,13 @@ func main() {
 	windows := &webview.Windows{Browser: browser}
 	browser.New = windows.New
 	ag := agent.New(st, models.Current, &agent.Deps{
-		Fetcher:    rank.NewFetcher(rank.DefaultFetcherConfig()),
+		Fetcher:    fetcher,
 		PSI:        webdata.NewPSI(webdata.DefaultPSIURL, ""),
 		Wayback:    webdata.NewWayback(webdata.DefaultWaybackURL),
 		Suggest:    webdata.NewSuggest(webdata.DefaultSuggestURL),
 		Collectors: &app.CollectorTools{Catalog: catalog, Runner: runner},
 		Cloud:      cl,
+		Tasks:      ops,
 	}, emit)
 
 	wapp = application.New(application.Options{
@@ -171,6 +193,10 @@ func main() {
 			application.NewService(&app.ModelService{Models: models}),
 			application.NewService(&app.AgentService{Agent: ag, Store: st}),
 			application.NewService(&app.CollectorService{Catalog: catalog, Runner: runner, Browser: browser}),
+			application.NewService(&app.HealthService{Ops: ops}),
+			application.NewService(&app.TaskService{Ops: ops}),
+			application.NewService(&app.ReportService{Ops: ops, Save: save}),
+			application.NewService(&app.NoticeService{Store: st}),
 		},
 		// The middleware serves collector windows their boot page and keeps
 		// them away from everything else the asset server offers.
@@ -190,6 +216,9 @@ func main() {
 	// window closes.
 	win.OnWindowEvent(events.Common.WindowClosing, func(*application.WindowEvent) { wapp.Quit() })
 	go app.RunSyncLoop(ctx, syncSvc, 6*time.Hour)
+	// Daily health checks at 08:00 (missed ones as soon as the app is open),
+	// task checks after them and a weekly report per site.
+	go app.RunOpsLoop(ctx, ops, 10*time.Minute)
 
 	if err := wapp.Run(); err != nil {
 		log.Fatal(err)

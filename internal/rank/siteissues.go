@@ -55,7 +55,7 @@ func SiteIssues(r *CrawlResult) []Issue {
 		for _, g := range groups {
 			n += len(g.URLs)
 		}
-		if n == 0 && id != "no_sitemap" && id != "robots_blocks_site" {
+		if n == 0 && id != "no_sitemap" && id != "robots_blocks_site" && id != "robots_server_error" {
 			return
 		}
 		count := len(urls)
@@ -65,6 +65,10 @@ func SiteIssues(r *CrawlResult) []Issue {
 		out = append(out, Issue{ID: id, Severity: sev, Title: title, Detail: detail, Count: count, URLs: capList(urls, issueURLCap), Groups: capGroups(groups)})
 	}
 
+	if r.RobotsStatus >= 500 {
+		add("robots_server_error", SeverityP0, "robots.txt answers with a server error",
+			fmt.Sprintf("robots.txt returned HTTP %d. Google treats that as \"crawl nothing\" and stops crawling the site until it answers 200 (or 404) again.", r.RobotsStatus), nil, nil)
+	}
 	if r.RobotsBlocksRoot {
 		add("robots_blocks_site", SeverityP0, "robots.txt blocks the whole site",
 			"robots.txt disallows / for all crawlers; search engines cannot crawl any page.", nil, nil)

@@ -3,16 +3,23 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { api, errText, isNetworkError, onEvent } from "./api";
 import { AgentPanel } from "./agent/AgentPanel";
 import { AddSite } from "./components/AddSite";
+import { Notices } from "./components/Notices";
 import { SitesPanel } from "./components/SitesPanel";
 import { StatusBar } from "./components/StatusBar";
 import { CollectorsPage } from "./pages/Collectors";
+import { HealthPage } from "./pages/Health";
 import { KeywordsPage } from "./pages/Keywords";
 import { OverviewPage } from "./pages/Overview";
+import { ReportsPage } from "./pages/Reports";
 import { SettingsPage } from "./pages/Settings";
-import { nextHumanRun } from "./format";
-import type { Account, CollectorStats, Info, RunView, Site, SyncProgress, SyncStatus } from "./types";
+import { TasksPage } from "./pages/Tasks";
+import { nextHumanRun, noticeTarget } from "./format";
+import type { Account, CollectorStats, HealthStatus, Info, Notice, RunView, Site, SiteHealth, SyncProgress, SyncStatus } from "./types";
 
-type Page = "overview" | "keywords" | "collectors" | "settings";
+type Page = "overview" | "keywords" | "health" | "tasks" | "reports" | "collectors" | "settings";
+
+/** Rail and tab entries for the per-site pages, in order. */
+const sitePages: [Page, string, string][] = [["overview", "◧", "概览"], ["keywords", "⌕", "关键词"], ["health", "✚", "体检"], ["tasks", "☑", "任务"], ["reports", "▤", "报告"]];
 
 export default function App() {
   const [account, setAccount] = useState<Account | null>(null);
@@ -28,6 +35,8 @@ export default function App() {
   const [error, setError] = useState("");
   const [loggingIn, setLoggingIn] = useState(false);
   const [modelRev, setModelRev] = useState(0);
+  const [scores, setScores] = useState<Record<number, SiteHealth>>({});
+  const [openReport, setOpenReport] = useState<number | null>(null);
   const [agentOpen, setAgentOpen] = useState(() => localStorage.getItem("agentOpen") !== "0");
   // Login can block up to 5 minutes if the user abandons the browser; keep the
   // cancellable promise around so the sidebar button can cancel it.
@@ -68,11 +77,15 @@ export default function App() {
     api.collectorStats().then(setCollect).catch(() => {});
     const offCollect = onEvent<CollectorStats>("collect:stats", setCollect);
     const offRun = onEvent<RunView>("collect:run", (r) => setHuman((cur) => nextHumanRun(cur, r)));
+    const loadScores = () => api.healthScores().then((l) => setScores(Object.fromEntries((l ?? []).map((h) => [h.siteId, h])))).catch(() => {});
+    loadScores();
+    const offHealth = onEvent<HealthStatus>("health:status", (s) => { if (s.state !== "running") loadScores(); });
     return () => {
       offStatus();
       offProgress();
       offCollect();
       offRun();
+      offHealth();
     };
   }, [reloadSites]);
 
@@ -101,6 +114,14 @@ export default function App() {
     return !o;
   });
   const refreshAccount = useCallback(() => { api.account().then(setAccount).catch(() => {}); }, []);
+  // A notice opens the page it is about, on its site.
+  const openNotice = (n: Notice) => {
+    const target = noticeTarget(n.ref);
+    if (!target) return;
+    if (n.siteId && sites.some((s) => s.id === n.siteId)) setSiteId(n.siteId);
+    setOpenReport(target === "reports" ? Number(n.ref.split(":")[1]) : null);
+    setPage(target);
+  };
 
   const site = sites.find((s) => s.id === siteId) ?? null;
   return (
@@ -111,17 +132,21 @@ export default function App() {
       </div>
       <div className="body">
         <nav className="rail">
-          <button className={page === "overview" ? "on" : ""} title="概览" aria-label="概览" onClick={() => setPage("overview")}>◧</button>
-          <button className={page === "keywords" ? "on" : ""} title="关键词" aria-label="关键词" onClick={() => setPage("keywords")}>⌕</button>
+          {sitePages.map(([p, icon, label]) => (
+            <button key={p} className={page === p ? "on" : ""} title={label} aria-label={label} onClick={() => setPage(p)}>{icon}</button>
+          ))}
           <button className={page === "collectors" ? "on" : ""} title="采集器" aria-label="采集器" onClick={() => setPage("collectors")}>⧉</button>
           <button className={"bottom" + (page === "settings" ? " on" : "")} title="设置" aria-label="设置" onClick={() => setPage("settings")}>⚙</button>
         </nav>
-        <SitesPanel sites={sites} selected={siteId} statuses={statuses} account={account} loggingIn={loggingIn}
-          onSelect={(id) => { setSiteId(id); setPage((p) => (p === "settings" || p === "collectors" ? "overview" : p)); }} onAdd={() => setAdding(true)} onLogin={login} />
+        <SitesPanel sites={sites} selected={siteId} statuses={statuses} account={account}
+          scores={scores}
+          loggingIn={loggingIn}
+          onSelect={(id) => { setSiteId(id); setOpenReport(null); setPage((p) => (p === "settings" || p === "collectors" ? "overview" : p)); }} onAdd={() => setAdding(true)} onLogin={login} />
         <main>
           <div className="tabs">
-            <span className={page === "overview" ? "on" : ""}>{site ? `概览 · ${site.host}` : "概览"}</span>
-            <span className={page === "keywords" ? "on" : ""}>关键词</span>
+            {sitePages.map(([p, , label]) => (
+              <span key={p} className={page === p ? "on" : ""}>{p === "overview" && site ? `概览 · ${site.host}` : label}</span>
+            ))}
             <span className={page === "collectors" ? "on" : ""}>采集器</span>
             <span className={page === "settings" ? "on" : ""}>设置</span>
           </div>
@@ -141,13 +166,21 @@ export default function App() {
             <div className="content"><div className="empty">还没有站点。<button className="btn primary" onClick={() => setAdding(true)}>添加第一个站点</button></div></div>
           ) : page === "keywords" ? (
             <KeywordsPage key={site.id} site={site} account={account} onCreditsUsed={refreshAccount} />
+          ) : page === "health" ? (
+            <HealthPage key={site.id} site={site} />
+          ) : page === "tasks" ? (
+            <TasksPage key={site.id} site={site} />
+          ) : page === "reports" ? (
+            <ReportsPage key={site.id} site={site} openId={openReport} />
           ) : (
-            <OverviewPage key={site.id} site={site} status={statuses[site.id]} onChanged={reloadSites} />
+            <OverviewPage key={site.id} site={site} status={statuses[site.id]} onChanged={reloadSites} onOpenHealth={() => setPage("health")} />
           )}
         </main>
         {agentOpen && <AgentPanel site={site} account={account} modelRev={modelRev} onOpenSettings={() => setPage("settings")} onCreditsUsed={refreshAccount} />}
       </div>
-      <StatusBar status={site ? statuses[site.id] : undefined} progress={site ? progress[site.id] ?? null : null} info={info} siteId={site?.id} account={account} collect={collect} />
+      <StatusBar status={site ? statuses[site.id] : undefined} progress={site ? progress[site.id] ?? null : null} info={info} siteId={site?.id} account={account} collect={collect}>
+        <Notices onOpen={openNotice} />
+      </StatusBar>
       {adding && (
         <AddSite onCancel={() => setAdding(false)} onDone={async (s) => { setAdding(false); await reloadSites(); setSiteId(s.id); setPage("overview"); }} />
       )}
