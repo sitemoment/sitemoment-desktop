@@ -67,7 +67,7 @@ func TestAccountLogin(t *testing.T) {
 			}
 			w.Write([]byte(`{"access_token":"a1","refresh_token":"r1","expires_in":3600}`))
 		case "/v1/desktop/me":
-			w.Write([]byte(`{"user":{"email":"me@example.com","name":"Me"},"plan":{"name":"free"}}`))
+			w.Write([]byte(`{"user":{"email":"me@example.com","name":"Me"},"plan":{"name":"free"},"credits":{"month":"2026-11","used":12,"limit":200}}`))
 		}
 	}))
 	defer srv.Close()
@@ -76,7 +76,8 @@ func TestAccountLogin(t *testing.T) {
 		t.Fatalf("before login: %+v, %v", acct, err)
 	}
 	acct, err := a.Login(ctx)
-	if err != nil || !acct.SignedIn || acct.Email != "me@example.com" || acct.Plan != "free" {
+	if err != nil || !acct.SignedIn || acct.Email != "me@example.com" || acct.Plan != "free" ||
+		acct.CreditsUsed != 12 || acct.CreditsLimit != 200 || acct.CreditsMonth != "2026-11" {
 		t.Fatalf("Login = %+v, %v", acct, err)
 	}
 }
