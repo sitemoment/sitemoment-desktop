@@ -1,0 +1,23 @@
+{
+  "description": "免费，在本机用隐藏的浏览器窗口读谷歌趋势：一个词的热度走势（0–100，相对值，不是搜索量）、热门相关查询和上升最快的相关查询。用来判断词是在涨还是在跌、有没有季节性，以及找新说法。每次之间至少隔 10 秒，每天最多 100 次，结果缓存 1 天。",
+  "input": {
+    "type": "object",
+    "properties": {
+      "q": { "type": "string", "description": "英文关键词" },
+      "geo": { "type": "string", "description": "地区，两位大写国家代码，默认 US", "default": "US" },
+      "date": { "type": "string", "description": "时间范围", "enum": ["today 3-m", "today 12-m", "today 5-y"], "default": "today 12-m" }
+    },
+    "required": ["q"]
+  },
+  "output": {
+    "type": "object",
+    "properties": {
+      "query": { "type": "string" },
+      "geo": { "type": "string" },
+      "date": { "type": "string" },
+      "interest": { "type": "array", "items": { "type": "object", "properties": { "time": { "type": "string" }, "value": { "type": "number" } } } },
+      "top": { "type": "array", "items": { "type": "object", "properties": { "query": { "type": "string" }, "value": { "type": "string" } } } },
+      "rising": { "type": "array", "items": { "type": "object", "properties": { "query": { "type": "string" }, "value": { "type": "string" } } } }
+    }
+  }
+}

@@ -1,0 +1,38 @@
+{
+  "description": "免费，在本机用隐藏的浏览器窗口打开谷歌搜索（默认美国、英文），返回第一页：自然结果（排名、标题、网址、域名、摘要）、相关搜索、People Also Ask、有没有 AI 概览，以及谷歌显示的地区（location）。用来看一个词第一页都是谁、这个站有没有出现、排第几；用 site:域名 看收录。每次之间至少隔 10 秒，每天最多 200 次，结果缓存 7 天。urlFrom 为 breadcrumb 的结果只知道站点，不知道具体页面。回答时写明结果的地区和日期。",
+  "input": {
+    "type": "object",
+    "properties": {
+      "q": { "type": "string", "description": "搜索词，支持 site: 等谷歌指令" },
+      "gl": { "type": "string", "description": "国家，两位小写代码，默认 us", "default": "us" },
+      "hl": { "type": "string", "description": "界面语言，默认 en", "default": "en" }
+    },
+    "required": ["q"]
+  },
+  "output": {
+    "type": "object",
+    "properties": {
+      "url": { "type": "string" },
+      "query": { "type": "string" },
+      "location": { "type": "string", "description": "谷歌页面底部显示的地区" },
+      "aiOverview": { "type": "boolean" },
+      "organic": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "rank": { "type": "integer" },
+            "title": { "type": "string" },
+            "url": { "type": "string" },
+            "urlFrom": { "type": "string", "enum": ["direct", "redirect", "breadcrumb", ""] },
+            "domain": { "type": "string" },
+            "breadcrumb": { "type": "string" },
+            "snippet": { "type": "string" }
+          }
+        }
+      },
+      "related": { "type": "array", "items": { "type": "string" } },
+      "paa": { "type": "array", "items": { "type": "string" } }
+    }
+  }
+}
