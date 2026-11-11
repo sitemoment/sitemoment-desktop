@@ -1,0 +1,6 @@
+# Normalize line endings to LF on checkout, on every platform. Without
+# this, GitHub's Windows runners (core.autocrlf=true) check text files out
+# with CRLF, which breaks exact-byte comparisons like
+# internal/release.TestStampWritesEveryVersionField against
+# build/darwin/Info.plist.
+* text=auto eol=lf

@@ -222,6 +222,10 @@ func TestProviderRejectsASignatureReplayedUnderADifferentTag(t *testing.T) {
 
 // TestProviderRejectsASignatureForADifferentAssetName: a signature made for
 // one asset cannot be copied onto a same-named asset of a different release.
+// The wrong name must differ from UpdateAsset(runtime.GOOS, runtime.GOARCH)
+// on every CI platform, not just the one this was first written on, so it
+// is derived rather than a hardcoded "windows" name (which equals the real
+// asset name when this test itself runs on windows/amd64).
 func TestProviderRejectsASignatureForADifferentAssetName(t *testing.T) {
 	f := newFakeGitHub(t, "v1.1.0")
 	pub, seed, err := GenerateKey()
@@ -232,8 +236,9 @@ func TestProviderRejectsASignatureForADifferentAssetName(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	wrongName := UpdateAsset(runtime.GOOS, runtime.GOARCH) + "-not-the-real-asset"
 	sum := sha256.Sum256(f.payload)
-	if f.sig, err = SignRelease(seed, f.tag, "SiteMoment-windows-amd64.zip", sum[:]); err != nil {
+	if f.sig, err = SignRelease(seed, f.tag, wrongName, sum[:]); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := check(t, f, pk); err == nil || !strings.Contains(err.Error(), "signature") {
