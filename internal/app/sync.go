@@ -90,6 +90,9 @@ type SyncService struct {
 	// RetryAfterRateLimit is how long to wait before automatically retrying
 	// a rate-limited site. 0: defaultRetryAfterRateLimit.
 	RetryAfterRateLimit time.Duration
+	// After runs once a site's sync has finished (done or failed), in the
+	// sync's goroutine: main.go evaluates the site's tasks there.
+	After func(siteID int64)
 
 	mu       sync.Mutex
 	status   map[int64]SyncStatus
@@ -210,6 +213,9 @@ func (s *SyncService) run(ctx context.Context, siteID int64) {
 		st.State, st.Error = "failed", strings.Join(problems, "；")
 	}
 	s.setStatus(st)
+	if s.After != nil && ctx.Err() == nil {
+		s.After(siteID)
+	}
 
 	s.mu.Lock()
 	again := s.again[siteID]
