@@ -75,7 +75,7 @@ func main() {
 		}
 	}
 	syncer := &gscsync.Syncer{Store: st, Tokens: tokens, GSC: gsc, Progress: func(p gscsync.Progress) { emit("sync:progress", p) }}
-	syncSvc := &app.SyncService{Syncer: syncer, Store: st, Emit: emit, Ctx: ctx}
+	syncSvc := &app.SyncService{Sources: []app.Source{app.GSCSource{Syncer: syncer}}, Store: st, Emit: emit, Ctx: ctx}
 
 	wapp = application.New(application.Options{
 		Name: "SiteMoment",

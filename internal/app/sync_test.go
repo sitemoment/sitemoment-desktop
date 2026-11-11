@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -21,7 +22,9 @@ import (
 // tokenFunc adapts a function to gscsync.TokenSource.
 type tokenFunc func(ctx context.Context, account string) (string, error)
 
-func (f tokenFunc) AccessToken(ctx context.Context, account string) (string, error) { return f(ctx, account) }
+func (f tokenFunc) AccessToken(ctx context.Context, account string) (string, error) {
+	return f(ctx, account)
+}
 
 // fakeQuerier is a gscsync.Querier that always fails, so a run that gets
 // past AccessToken stops quickly instead of looping over every slice.
@@ -51,10 +54,29 @@ func bindSite(t *testing.T, host string) (int64, *store.Store) {
 	return site.ID, st
 }
 
+// gscOnly is the source list of the M1 tests: Search Console only.
+func gscOnly(g *gscsync.Syncer) []Source { return []Source{GSCSource{Syncer: g}} }
+
+// fakeSource is a Source with a fixed binding and result.
+type fakeSource struct {
+	name  string
+	bound bool
+	res   gscsync.Result
+	err   error
+	calls atomic.Int64
+}
+
+func (f *fakeSource) Name() string          { return f.name }
+func (f *fakeSource) Bound(store.Site) bool { return f.bound }
+func (f *fakeSource) Sync(context.Context, store.Site) (gscsync.Result, error) {
+	f.calls.Add(1)
+	return f.res, f.err
+}
+
 // TestSyncNowRunsOncePerSite guards against SyncNow's check-then-set race:
-// many callers racing SyncNow for the same site must start exactly one run,
-// never more. The fake token source blocks so the first run cannot finish
-// before every concurrent SyncNow call has had a chance to also start one.
+// many callers racing SyncNow for the same site while a run is in flight
+// start exactly one run, plus exactly one follow-up run after it ("again"),
+// never more.
 func TestSyncNowRunsOncePerSite(t *testing.T) {
 	siteID, st := bindSite(t, "example.com")
 
@@ -70,20 +92,13 @@ func TestSyncNowRunsOncePerSite(t *testing.T) {
 		<-release
 		return "", errors.New("stop after token")
 	})
-	done := make(chan SyncStatus, 1)
+	finished := make(chan SyncStatus, 10)
 	emit := func(name string, data any) {
-		if name != "sync:status" {
-			return
-		}
-		if st, ok := data.(SyncStatus); ok && st.State != "running" {
-			select {
-			case done <- st:
-			default:
-			}
+		if st, ok := data.(SyncStatus); ok && name == "sync:status" && st.State != "running" {
+			finished <- st
 		}
 	}
-	syncer := &gscsync.Syncer{Store: st, Tokens: tokens, GSC: fakeQuerier{}}
-	s := &SyncService{Syncer: syncer, Store: st, Emit: emit}
+	s := &SyncService{Sources: gscOnly(&gscsync.Syncer{Store: st, Tokens: tokens, GSC: fakeQuerier{}}), Store: st, Emit: emit}
 
 	var wg sync.WaitGroup
 	start := make(chan struct{})
@@ -95,7 +110,7 @@ func TestSyncNowRunsOncePerSite(t *testing.T) {
 			s.SyncNow(siteID)
 		}()
 	}
-	close(start) // release all 20 at once to maximize contention on SyncNow
+	close(start)
 	wg.Wait()
 
 	select {
@@ -103,21 +118,25 @@ func TestSyncNowRunsOncePerSite(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("no run started")
 	}
-	// Give any erroneous extra goroutine a chance to also reach AccessToken
-	// before we check the count and unblock the one we expect.
 	time.Sleep(20 * time.Millisecond)
 	if n := calls.Load(); n != 1 {
-		t.Fatalf("AccessToken called %d times, want 1", n)
+		t.Fatalf("AccessToken called %d times while the first run was blocked, want 1", n)
 	}
 	close(release)
-
-	select {
-	case <-done:
-	case <-time.After(2 * time.Second):
-		t.Fatal("sync did not finish")
+	for i := 1; i <= 2; i++ {
+		select {
+		case <-finished:
+		case <-time.After(2 * time.Second):
+			t.Fatalf("run %d did not finish", i)
+		}
 	}
-	if n := calls.Load(); n != 1 {
-		t.Fatalf("AccessToken called %d times after finish, want 1", n)
+	select {
+	case st := <-finished:
+		t.Fatalf("a third run happened: %+v", st)
+	case <-time.After(100 * time.Millisecond):
+	}
+	if n := calls.Load(); n != 2 {
+		t.Fatalf("AccessToken called %d times, want 2 (the run and one follow-up)", n)
 	}
 }
 
@@ -134,7 +153,7 @@ func TestSyncUsesServiceContext(t *testing.T) {
 		return "", errors.New("stop")
 	})
 	syncCtx := context.WithValue(context.Background(), key{}, "marker")
-	s := &SyncService{Syncer: &gscsync.Syncer{Store: st, Tokens: tokens, GSC: fakeQuerier{}}, Store: st, Ctx: syncCtx}
+	s := &SyncService{Sources: gscOnly(&gscsync.Syncer{Store: st, Tokens: tokens, GSC: fakeQuerier{}}), Store: st, Ctx: syncCtx}
 
 	s.SyncNow(siteID)
 	select {
@@ -193,7 +212,7 @@ func TestSyncConcurrencyLimit(t *testing.T) {
 		<-release
 		return "", errors.New("stop")
 	})
-	s := &SyncService{Syncer: &gscsync.Syncer{Store: st, Tokens: tokens, GSC: fakeQuerier{}}, Store: st, Concurrency: 2}
+	s := &SyncService{Sources: gscOnly(&gscsync.Syncer{Store: st, Tokens: tokens, GSC: fakeQuerier{}}), Store: st, Concurrency: 2}
 	for _, id := range ids {
 		s.SyncNow(id)
 	}
@@ -240,7 +259,7 @@ func TestSyncSchedulesOneRetryAfterRateLimit(t *testing.T) {
 			statuses <- st
 		}
 	}
-	s := &SyncService{Syncer: &gscsync.Syncer{Store: st, Tokens: tokens, GSC: gsc}, Store: st, Emit: emit,
+	s := &SyncService{Sources: gscOnly(&gscsync.Syncer{Store: st, Tokens: tokens, GSC: gsc}), Store: st, Emit: emit,
 		RetryAfterRateLimit: 10 * time.Millisecond}
 
 	waitFor := func(state string) {
@@ -264,5 +283,33 @@ func TestSyncSchedulesOneRetryAfterRateLimit(t *testing.T) {
 
 	if n := calls.Load(); n < 2 {
 		t.Fatalf("GSC.Query called %d times, want at least 2 (original run + retry)", n)
+	}
+}
+
+// TestSyncRunsEveryBoundSource checks that a run syncs each bound source,
+// skips unbound ones, keeps going after one fails, and names the source
+// that failed.
+func TestSyncRunsEveryBoundSource(t *testing.T) {
+	siteID, st := bindSite(t, "sources.example.com")
+	gsc := &fakeSource{name: "gsc", bound: true, res: gscsync.Result{Requests: 4}}
+	ga := &fakeSource{name: "ga", bound: true, res: gscsync.Result{Requests: 1}, err: google.ErrGAScope}
+	bg := &fakeSource{name: "bing", bound: false}
+	finished := make(chan SyncStatus, 4)
+	s := &SyncService{Sources: []Source{gsc, ga, bg}, Store: st, Emit: func(name string, data any) {
+		if st, ok := data.(SyncStatus); ok && st.State != "running" {
+			finished <- st
+		}
+	}}
+	s.SyncNow(siteID)
+	select {
+	case got := <-finished:
+		if got.State != "failed" || got.Requests != 5 || !strings.HasPrefix(got.Error, "GA4：") || strings.Contains(got.Error, "Search Console") {
+			t.Fatalf("status = %+v", got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("sync did not finish")
+	}
+	if gsc.calls.Load() != 1 || ga.calls.Load() != 1 || bg.calls.Load() != 0 {
+		t.Fatalf("calls gsc=%d ga=%d bing=%d", gsc.calls.Load(), ga.calls.Load(), bg.calls.Load())
 	}
 }
