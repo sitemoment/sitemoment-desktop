@@ -183,6 +183,27 @@ func TestStatusAndIndexedConditions(t *testing.T) {
 	}
 }
 
+func TestIndexedConditionIgnoresInspectionFromBeforeTheTaskStarted(t *testing.T) {
+	s, site, now := setup(t, "127.0.0.1")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("ok")) }))
+	defer srv.Close()
+	// Already indexed before the task existed: must not satisfy page_indexed on its own.
+	ok(t, s.Store.SetInspection(ctx, site.ID, srv.URL+"/new", "PASS", "Submitted and indexed", now.Add(-time.Hour).Unix()))
+	v, err := s.Propose(ctx, Proposal{SiteID: site.ID, Title: "新页面收录", Open: true,
+		Conditions: []Condition{{Kind: KindIndexed, URL: srv.URL + "/new"}}})
+	ok(t, err)
+	if v.Outcomes[0].State != StatePending {
+		t.Fatalf("a pre-task inspection must not satisfy page_indexed: %+v", v.Outcomes[0])
+	}
+	// A fresh inspection, after the task started, does.
+	ok(t, s.Store.SetInspection(ctx, site.ID, srv.URL+"/new", "PASS", "Submitted and indexed", now.Add(time.Minute).Unix()))
+	done, err := s.Evaluate(ctx, site.ID)
+	ok(t, err)
+	if len(done) != 1 || done[0].Status != StatusPassed {
+		t.Fatalf("done = %+v", done)
+	}
+}
+
 func TestDismiss(t *testing.T) {
 	s, site, _ := setup(t, "example.com")
 	v, err := s.Propose(ctx, Proposal{SiteID: site.ID, Title: "x", Conditions: []Condition{{Kind: KindIndexed, URL: "https://example.com/"}}})

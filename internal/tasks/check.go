@@ -86,7 +86,7 @@ func (s *Service) check(ctx context.Context, site store.Site, t store.Task, c Co
 	case KindStatus:
 		return s.checkStatus(ctx, c)
 	case KindIndexed:
-		return s.checkIndexed(ctx, site, c)
+		return s.checkIndexed(ctx, site, t, c)
 	}
 	return Outcome{State: StatePending, Note: "未知的条件类型"}
 }
@@ -152,7 +152,7 @@ func (s *Service) checkStatus(ctx context.Context, c Condition) Outcome {
 	return o
 }
 
-func (s *Service) checkIndexed(ctx context.Context, site store.Site, c Condition) Outcome {
+func (s *Service) checkIndexed(ctx context.Context, site store.Site, t store.Task, c Condition) Outcome {
 	if site.GSCProperty == "" {
 		return Outcome{State: StatePending, Note: "这个站点没有绑定 Search Console，不能检查收录"}
 	}
@@ -162,6 +162,10 @@ func (s *Service) checkIndexed(ctx context.Context, site store.Site, c Condition
 	}
 	if err != nil {
 		return Outcome{State: StatePending, Note: err.Error()}
+	}
+	if p.IndexCheckedAt < t.StartedAt {
+		// A verdict from before the task started proves nothing about what the task changed.
+		return Outcome{State: StatePending, Note: "等任务开始之后的网址检查（上一次检查是在任务开始之前）"}
 	}
 	when := time.Unix(p.IndexCheckedAt, 0).Format("2006-01-02")
 	if p.IndexVerdict == "PASS" {
