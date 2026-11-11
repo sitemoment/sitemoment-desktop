@@ -34,3 +34,20 @@ func TestParseKeywordMetrics(t *testing.T) {
 		t.Fatal("bad input should give no keywords")
 	}
 }
+
+// TestParseKeywordMetricsFoundFalseVariants covers "found" values other
+// than the JSON boolean false: web.cafe's actual shape is undocumented, so
+// a numeric or string false must be treated the same way.
+func TestParseKeywordMetricsFoundFalseVariants(t *testing.T) {
+	got := ParseKeywordMetrics([]byte(`{"items":[
+		{"keyword":"string false","found":"false","volume":500},
+		{"keyword":"shouty false","found":"FALSE","volume":500},
+		{"keyword":"zero found","found":0,"volume":500},
+		{"keyword":"kept","found":true,"volume":500}]}`))
+	if len(got) != 1 {
+		t.Fatalf("got %d keywords, want only \"kept\": %+v", len(got), got)
+	}
+	if _, ok := got["kept"]; !ok {
+		t.Fatalf("missing kept: %+v", got)
+	}
+}

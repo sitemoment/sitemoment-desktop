@@ -91,24 +91,25 @@ func TestBingKeys(t *testing.T) {
 	if list, _ := b.Keys(ctx); len(list) != 0 {
 		t.Fatalf("a bad key was kept: %+v", list)
 	}
+	name := bingKeyName("goodkey1234")
 	conn, err := b.AddKey(ctx, "  goodkey1234 \n")
-	if err != nil || conn.Account != "bing-1234" || conn.Kind != "bing" {
+	if err != nil || conn.Account != name || conn.Kind != "bing" {
 		t.Fatalf("AddKey = %+v, %v", conn, err)
 	}
-	if v, _ := sec.Get("bing:bing-1234"); v != "goodkey1234" {
+	if v, _ := sec.Get("bing:" + name); v != "goodkey1234" {
 		t.Fatalf("keychain = %q", v)
 	}
-	sites, err := b.Sites(ctx, "bing-1234")
+	sites, err := b.Sites(ctx, name)
 	if err != nil || len(sites) != 1 || !sites[0].Verified {
 		t.Fatalf("Sites = %+v, %v", sites, err)
 	}
-	if k, err := (&BingKeys{Secrets: sec}).BingKey("bing-1234"); err != nil || k != "goodkey1234" {
+	if k, err := (&BingKeys{Secrets: sec}).BingKey(name); err != nil || k != "goodkey1234" {
 		t.Fatalf("BingKey = %q, %v", k, err)
 	}
-	if err := b.RemoveKey(ctx, "bing-1234"); err != nil {
+	if err := b.RemoveKey(ctx, name); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := b.Sites(ctx, "bing-1234"); !errors.Is(err, bing.ErrInvalidKey) {
+	if _, err := b.Sites(ctx, name); !errors.Is(err, bing.ErrInvalidKey) {
 		t.Fatalf("after remove: %v", err)
 	}
 	if list, _ := b.Keys(ctx); len(list) != 0 {
@@ -116,5 +117,73 @@ func TestBingKeys(t *testing.T) {
 	}
 	if _, err := b.AddKey(ctx, "short"); err == nil || !strings.Contains(err.Error(), "API key") {
 		t.Fatalf("short key: %v", err)
+	}
+}
+
+// TestBingKeyNamesDontCollide covers two keys that end with the same four
+// characters: the old "bing-<last4>" naming would have stored them under
+// the same keychain/connection name, so the second AddKey would silently
+// overwrite the first.
+func TestBingKeyNamesDontCollide(t *testing.T) {
+	valid := map[string]bool{"keyone1234": true, "keytwo1234": true}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !valid[r.URL.Query().Get("apikey")] {
+			w.WriteHeader(400)
+			w.Write([]byte(`{"ErrorCode":3,"Message":"InvalidApiKey"}`))
+			return
+		}
+		w.Write([]byte(`{"d":[{"Url":"https://example.com/","IsVerified":true}]}`))
+	}))
+	defer srv.Close()
+	st, sec := openStore(t), secret.NewMemory()
+	b := &BingService{Bing: &bing.Client{HTTP: srv.Client(), Base: srv.URL}, Store: st, Secrets: sec}
+
+	c1, err := b.AddKey(ctx, "keyone1234")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c2, err := b.AddKey(ctx, "keytwo1234")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c1.Account == c2.Account {
+		t.Fatalf("names collided: %q", c1.Account)
+	}
+	if list, err := b.Keys(ctx); err != nil || len(list) != 2 {
+		t.Fatalf("Keys = %+v, %v", list, err)
+	}
+	keys := &BingKeys{Secrets: sec}
+	if k, err := keys.BingKey(c1.Account); err != nil || k != "keyone1234" {
+		t.Fatalf("BingKey(%q) = %q, %v", c1.Account, k, err)
+	}
+	if k, err := keys.BingKey(c2.Account); err != nil || k != "keytwo1234" {
+		t.Fatalf("BingKey(%q) = %q, %v", c2.Account, k, err)
+	}
+}
+
+// failDeleteSecrets is a secret.Store whose Delete always fails, used to
+// check RemoveKey's ordering: the connection row must be gone even when the
+// keychain delete never succeeds.
+type failDeleteSecrets struct{ *secret.Memory }
+
+func (failDeleteSecrets) Delete(string) error { return errors.New("boom") }
+
+func TestRemoveKeyDeletesTheConnectionFirst(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"d":[{"Url":"https://example.com/","IsVerified":true}]}`))
+	}))
+	defer srv.Close()
+	st := openStore(t)
+	sec := failDeleteSecrets{secret.NewMemory()}
+	b := &BingService{Bing: &bing.Client{HTTP: srv.Client(), Base: srv.URL}, Store: st, Secrets: sec}
+	conn, err := b.AddKey(ctx, "goodkey1234")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := b.RemoveKey(ctx, conn.Account); err == nil {
+		t.Fatal("expected the keychain delete to fail")
+	}
+	if list, _ := b.Keys(ctx); len(list) != 0 {
+		t.Fatalf("connection still present after a failed keychain delete: %+v", list)
 	}
 }

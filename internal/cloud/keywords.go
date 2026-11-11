@@ -25,8 +25,8 @@ var (
 // these shapes, so this is deliberately tolerant: it walks the JSON for
 // objects that name a keyword and takes the first number under each
 // metric's known names (a JSON number, a numeric string like "12,100", or
-// an object with "value"/"score"). Rows with "found": false are skipped.
-// Keys are lower case with single spaces.
+// an object with "value"/"score"). Rows marked not found (see
+// isFoundFalse) are skipped. Keys are lower case with single spaces.
 func ParseKeywordMetrics(data []byte) map[string]KeywordMetrics {
 	out := map[string]KeywordMetrics{}
 	dec := json.NewDecoder(bytes.NewReader(data))
@@ -59,7 +59,7 @@ func walk(v any, out map[string]KeywordMetrics) {
 			}
 			return
 		}
-		if found, ok := x["found"].(bool); ok && !found {
+		if fv, ok := x["found"]; ok && isFoundFalse(fv) {
 			return
 		}
 		m := KeywordMetrics{Volume: firstNumber(x, volumeKeys), KD: firstNumber(x, kdKeys), CPC: firstNumber(x, cpcKeys)}
@@ -78,6 +78,22 @@ func walk(v any, out map[string]KeywordMetrics) {
 		}
 		out[kw] = old
 	}
+}
+
+// isFoundFalse reports whether a "found" field marks the row as not found:
+// the boolean false, the string "false" (any case, surrounding space
+// ignored), or the number 0.
+func isFoundFalse(v any) bool {
+	switch x := v.(type) {
+	case bool:
+		return !x
+	case string:
+		return strings.EqualFold(strings.TrimSpace(x), "false")
+	case json.Number:
+		f, err := x.Float64()
+		return err == nil && f == 0
+	}
+	return false
 }
 
 func firstNumber(obj map[string]any, keys []string) *float64 {

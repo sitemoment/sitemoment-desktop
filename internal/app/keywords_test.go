@@ -181,6 +181,27 @@ func TestKeywordCloudBatchesAndErrors(t *testing.T) {
 	if _, err := k.QuoteCloud(ctx, site.ID, ids(l.Keywords)[:1]); err == nil || !strings.Contains(err.Error(), "登录") {
 		t.Fatalf("signed out = %v", err)
 	}
+	if _, err := k.FetchCloud(ctx, site.ID, ids(l.Keywords)[:1]); err == nil || !strings.Contains(err.Error(), "登录") {
+		t.Fatalf("FetchCloud signed out = %v", err)
+	}
+}
+
+// TestKeywordChosenDedupesBeforeTheLimit covers chosen() collapsing
+// duplicate ids before checking maxChosen: a selection that repeats one
+// keyword many times must not be rejected as "too many".
+func TestKeywordChosenDedupesBeforeTheLimit(t *testing.T) {
+	k, _, site, _, _ := keywordService(t)
+	k.Add(ctx, site.ID, "ai chat", store.KindTarget)
+	l, _ := k.List(ctx, site.ID, "")
+	id := l.Keywords[0].ID
+	many := make([]int64, maxChosen+50)
+	for i := range many {
+		many[i] = id
+	}
+	q, err := k.QuoteCloud(ctx, site.ID, many)
+	if err != nil || q.Keywords != 1 {
+		t.Fatalf("QuoteCloud with a repeated id = %+v, %v", q, err)
+	}
 }
 
 func TestKeywordFetchBingNeedsAKey(t *testing.T) {

@@ -143,21 +143,27 @@ func (k *KeywordService) Remove(ctx context.Context, id int64) error {
 	return k.Store.DeleteKeyword(ctx, id)
 }
 
-// chosen is the site's keywords among ids (others are dropped).
+// chosen is the site's keywords among ids (others are dropped). Duplicate
+// ids are collapsed before the max-count check, so repeating the same id
+// many times (e.g. a careless caller) cannot trip it on its own.
 func (k *KeywordService) chosen(ctx context.Context, siteID int64, ids []int64) ([]store.Keyword, error) {
 	if len(ids) == 0 {
 		return nil, errors.New("先选中要取数的关键词")
 	}
-	if len(ids) > maxChosen {
-		return nil, fmt.Errorf("一次最多取 %d 个关键词", maxChosen)
-	}
 	seen := map[int64]bool{}
-	out := []store.Keyword{}
+	unique := make([]int64, 0, len(ids))
 	for _, id := range ids {
 		if seen[id] {
 			continue
 		}
 		seen[id] = true
+		unique = append(unique, id)
+	}
+	if len(unique) > maxChosen {
+		return nil, fmt.Errorf("一次最多取 %d 个关键词", maxChosen)
+	}
+	out := []store.Keyword{}
+	for _, id := range unique {
 		kw, err := k.Store.Keyword(ctx, id)
 		if errors.Is(err, store.ErrNotFound) {
 			continue

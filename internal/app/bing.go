@@ -3,6 +3,8 @@ package app
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"strings"
@@ -35,9 +37,20 @@ type BingService struct {
 	Secrets secret.Store
 }
 
-// AddKey checks the key with Bing, keeps it in the keychain under the name
-// "bing-<last 4 characters>" and records the connection. Only the name is
-// ever stored in the database.
+// bingKeyName derives a keychain/connection name from a key: its last four
+// characters (so a human can recognize it) plus the first six hex digits of
+// its SHA-256, so two keys that happen to share the same last four
+// characters still get distinct names instead of overwriting each other.
+// Existing names already stored keep working either way, since the name is
+// only ever used as an opaque lookup key.
+func bingKeyName(key string) string {
+	sum := sha256.Sum256([]byte(key))
+	return "bing-" + key[len(key)-4:] + "-" + hex.EncodeToString(sum[:])[:6]
+}
+
+// AddKey checks the key with Bing, keeps it in the keychain under a name
+// derived from the key (see bingKeyName) and records the connection. Only
+// the name is ever stored in the database.
 func (b *BingService) AddKey(ctx context.Context, key string) (store.Connection, error) {
 	key = strings.TrimSpace(key)
 	if len(key) < 8 || strings.ContainsAny(key, " \t\r\n") {
@@ -46,7 +59,7 @@ func (b *BingService) AddKey(ctx context.Context, key string) (store.Connection,
 	if _, err := b.Bing.Sites(ctx, key); err != nil {
 		return store.Connection{}, err
 	}
-	name := "bing-" + key[len(key)-4:]
+	name := bingKeyName(key)
 	if err := b.Secrets.Set(bingKeyPrefix+name, key); err != nil {
 		return store.Connection{}, err
 	}
@@ -62,12 +75,14 @@ func (b *BingService) Keys(ctx context.Context) ([]store.Connection, error) {
 	return b.Store.Connections(ctx, "bing")
 }
 
-// RemoveKey forgets a key.
+// RemoveKey forgets a key: the connection row goes first, so a failed
+// keychain delete never leaves a connection pointing at a secret that
+// cannot be looked up, let alone deleted, again.
 func (b *BingService) RemoveKey(ctx context.Context, account string) error {
-	if err := b.Secrets.Delete(bingKeyPrefix + account); err != nil {
+	if err := b.Store.DeleteConnection(ctx, "bing", account); err != nil {
 		return err
 	}
-	return b.Store.DeleteConnection(ctx, "bing", account)
+	return b.Secrets.Delete(bingKeyPrefix + account)
 }
 
 // Sites lists the sites the saved key can read.
