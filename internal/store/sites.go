@@ -186,3 +186,10 @@ func (s *Store) rebind(ctx context.Context, id int64, accountCol, targetCol, acc
 func (s *Store) BindGA(ctx context.Context, id int64, account, property string) error {
 	return s.rebind(ctx, id, "ga_account", "ga_property", account, property, "ga", "DELETE FROM ga_facts WHERE site_id = ?")
 }
+
+// BindBing sets which Bing key (by its name) and Bing Webmaster site feed
+// the site; empty strings unbind it.
+func (s *Store) BindBing(ctx context.Context, id int64, account, siteURL string) error {
+	return s.rebind(ctx, id, "bing_account", "bing_site", account, siteURL, "bing",
+		"DELETE FROM bing_daily WHERE site_id = ?", "DELETE FROM bing_queries WHERE site_id = ?", "DELETE FROM bing_pages WHERE site_id = ?")
+}
