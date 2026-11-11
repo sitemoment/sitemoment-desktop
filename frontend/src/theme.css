@@ -224,3 +224,9 @@ select.chip { padding: 2px 4px; }
 .send { border: 1px solid var(--accent); background: transparent; color: var(--accent); border-radius: 5px; width: 26px; height: 24px; }
 .send.stop { border-color: var(--bad); color: var(--bad); }
 .send:disabled { opacity: .4; cursor: default; }
+
+/* Settings → AI 模型 */
+.radio-row { display: flex; gap: 8px; align-items: flex-start; padding: 6px 0; cursor: pointer; }
+.radio-row span { display: flex; flex-direction: column; }
+.radio-row small { color: var(--text-3); }
+.model-settings h2 span { text-transform: none; letter-spacing: 0; font-family: var(--mono); color: var(--text-2); }

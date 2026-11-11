@@ -37,8 +37,8 @@ function ItemView({ item }: { item: Item }) {
 }
 
 /** The right-hand SEO Agent panel for the selected site. */
-export function AgentPanel({ site, account, onOpenSettings, onCreditsUsed }: {
-  site: Site | null; account: Account | null; onOpenSettings: () => void; onCreditsUsed: () => void;
+export function AgentPanel({ site, account, modelRev, onOpenSettings, onCreditsUsed }: {
+  site: Site | null; account: Account | null; modelRev: number; onOpenSettings: () => void; onCreditsUsed: () => void;
 }) {
   const [sessions, setSessions] = useState<SessionView[]>([]);
   const [sessionId, setSessionId] = useState<number | null>(null);
@@ -69,7 +69,8 @@ export function AgentPanel({ site, account, onOpenSettings, onCreditsUsed }: {
     dispatch({ type: "load", transcript: await api.transcript(id) });
   }, []);
 
-  useEffect(loadModel, [loadModel]);
+  // Reload the model label when the settings or the sign-in change.
+  useEffect(loadModel, [loadModel, modelRev, account?.signedIn]);
   useEffect(() => {
     setSessions([]);
     setSessionId(null);

@@ -23,6 +23,7 @@ export default function App() {
   const [adding, setAdding] = useState(false);
   const [error, setError] = useState("");
   const [loggingIn, setLoggingIn] = useState(false);
+  const [modelRev, setModelRev] = useState(0);
   const [agentOpen, setAgentOpen] = useState(() => localStorage.getItem("agentOpen") !== "0");
   // Login can block up to 5 minutes if the user abandons the browser; keep the
   // cancellable promise around so the sidebar button can cancel it.
@@ -115,7 +116,8 @@ export default function App() {
           </div>
           {error && <div className="toolbar error">{error}</div>}
           {page === "settings" ? (
-            <SettingsPage account={account} info={info} sites={sites} onAccount={setAccount} onLogin={login} onSitesChanged={reloadSites} />
+            <SettingsPage account={account} info={info} sites={sites} onAccount={setAccount} onLogin={login} onSitesChanged={reloadSites}
+              onModelChanged={() => setModelRev((n) => n + 1)} />
           ) : !site ? (
             <div className="content"><div className="empty">还没有站点。<button className="btn primary" onClick={() => setAdding(true)}>添加第一个站点</button></div></div>
           ) : page === "keywords" ? (
@@ -124,7 +126,7 @@ export default function App() {
             <OverviewPage key={site.id} site={site} status={statuses[site.id]} onChanged={reloadSites} />
           )}
         </main>
-        {agentOpen && <AgentPanel site={site} account={account} onOpenSettings={() => setPage("settings")} onCreditsUsed={refreshAccount} />}
+        {agentOpen && <AgentPanel site={site} account={account} modelRev={modelRev} onOpenSettings={() => setPage("settings")} onCreditsUsed={refreshAccount} />}
       </div>
       <StatusBar status={site ? statuses[site.id] : undefined} progress={site ? progress[site.id] ?? null : null} info={info} siteId={site?.id} account={account} />
       {adding && (

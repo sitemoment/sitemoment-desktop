@@ -1,6 +1,7 @@
 import { CancelError } from "@wailsio/runtime";
 import { useEffect, useRef, useState } from "react";
 import { api, errText, signedOut, type Cancellable } from "../api";
+import { ModelSettingsPanel } from "../components/ModelSettings";
 import { fmtBytes } from "../format";
 import type { Account, Connection, Info, Site } from "../types";
 
@@ -12,7 +13,7 @@ const CONFIRM_MS = 3000;
 
 export function SettingsPage(props: {
   account: Account | null; info: Info | null; sites: Site[];
-  onAccount: (a: Account) => void; onLogin: () => void; onSitesChanged: () => void;
+  onAccount: (a: Account) => void; onLogin: () => void; onSitesChanged: () => void; onModelChanged: () => void;
 }) {
   const { account, info, sites } = props;
   const [conns, setConns] = useState<Connection[]>([]);
@@ -92,11 +93,12 @@ export function SettingsPage(props: {
           <div className="row"><span>{account.email} · {account.plan || "free"}</span><button className="btn" disabled={busy} onClick={logout}>退出登录</button></div>
         ) : (
           <>
-            <p>登录后可以使用托管模型和 SiteMoment 的 SEO 数据（后续版本）。站点数据和 Google 授权始终只保存在这台电脑上。</p>
+            <p>登录后可以使用托管模型和 SiteMoment 的付费 SEO 数据。站点数据和 Google 授权始终只保存在这台电脑上。</p>
             <button className="btn primary" onClick={props.onLogin}>登录 SiteMoment</button>
           </>
         )}
       </section>
+      <ModelSettingsPanel account={account} onChanged={props.onModelChanged} />
       <section className="panel">
         <h2>Google 账号</h2>
         {conns.map((c) => (
