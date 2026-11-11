@@ -6,8 +6,11 @@
 #   make test       Go and frontend tests
 #   make reset      delete the test data directory
 #
-# Google (Search Console, GA4) needs a "Desktop app" OAuth client. Put it in
-# .env.local (not committed):
+# Google (Search Console, GA4) uses the "Desktop app" OAuth client the
+# backend hands out at GET /v1/desktop/config (owner's central config in
+# the admin console); no .env.local needed for that. To use your own OAuth
+# client instead (an env/ldflags override always wins over the backend's),
+# put it in .env.local (optional, not committed):
 #
 #   SITEMOMENT_GOOGLE_CLIENT_ID=...
 #   SITEMOMENT_GOOGLE_CLIENT_SECRET=...

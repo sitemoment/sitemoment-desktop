@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/sitemoment/sitemoment-desktop/internal/secret"
 )
@@ -184,5 +185,60 @@ func TestLoginURLTrimsTrailingSlash(t *testing.T) {
 	u, err := url.Parse(c.LoginURL("http://127.0.0.1:5000/callback", "st", "ch"))
 	if err != nil || u.Path != "/api/auth/desktop/start" {
 		t.Fatalf("LoginURL with trailing slash = %v %v", u, err)
+	}
+}
+
+func TestDesktopConfig(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/desktop/config" {
+			t.Errorf("unexpected path %s", r.URL.Path)
+		}
+		if r.Header.Get("Authorization") != "" {
+			t.Errorf("unexpected Authorization header %q (endpoint is unauthenticated)", r.Header.Get("Authorization"))
+		}
+		w.Write([]byte(`{"google":{"clientId":"cid","clientSecret":"sec"}}`))
+	}))
+	defer srv.Close()
+	c := &Client{Base: srv.URL, HTTP: srv.Client()}
+	cfg, err := c.DesktopConfig(ctx)
+	if err != nil || cfg.Google.ClientID != "cid" || cfg.Google.ClientSecret != "sec" {
+		t.Fatalf("DesktopConfig = %+v, %v", cfg, err)
+	}
+}
+
+func TestDesktopConfigEmpty(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"google":{"clientId":"","clientSecret":""}}`))
+	}))
+	defer srv.Close()
+	c := &Client{Base: srv.URL, HTTP: srv.Client()}
+	cfg, err := c.DesktopConfig(ctx)
+	if err != nil || cfg.Google.ClientID != "" || cfg.Google.ClientSecret != "" {
+		t.Fatalf("DesktopConfig = %+v, %v", cfg, err)
+	}
+}
+
+// TestDesktopConfigTimeout: a backend that never answers must not hang the
+// caller forever; DesktopConfig bounds the wait on its own regardless of the
+// context the caller passed in. desktopConfigTimeout is shortened for the
+// test instead of waiting out the real value.
+func TestDesktopConfigTimeout(t *testing.T) {
+	block := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-block
+	}))
+	defer srv.Close()
+	defer close(block)
+	old := desktopConfigTimeout
+	desktopConfigTimeout = 50 * time.Millisecond
+	defer func() { desktopConfigTimeout = old }()
+
+	c := &Client{Base: srv.URL, HTTP: srv.Client()}
+	start := time.Now()
+	if _, err := c.DesktopConfig(ctx); err == nil {
+		t.Fatal("DesktopConfig: want timeout error, got nil")
+	}
+	if d := time.Since(start); d > 2*time.Second {
+		t.Fatalf("DesktopConfig took %v, want it bounded by desktopConfigTimeout", d)
 	}
 }

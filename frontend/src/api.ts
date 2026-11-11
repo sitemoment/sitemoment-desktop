@@ -38,6 +38,7 @@ export const api = {
   login: () => AccountService.Login() as Cancellable<Account>,
   logout: () => call<void>(AccountService.Logout()),
   googleConfigured: () => call<boolean>(GoogleService.Configured()),
+  refreshGoogleConfig: () => call<boolean>(GoogleService.RefreshConfig()),
   connectGoogle: () => GoogleService.Connect() as Cancellable<Connection>,
   connections: () => call<Connection[]>(GoogleService.Connections()),
   disconnectGoogle: (account: string) => call<void>(GoogleService.Disconnect(account)),

@@ -66,6 +66,7 @@ export function SettingsPage(props: {
     });
   };
   const disconnect = (a: string) => guard(async () => { await api.disconnectGoogle(a); setConns(await api.connections()); })();
+  const refreshGoogleConfig = guard(async () => { setConfigured(await api.refreshGoogleConfig()); });
   const addBing = guard(async () => {
     await api.addBingKey(bingKey);
     setBingKey("");
@@ -107,7 +108,12 @@ export function SettingsPage(props: {
         {conns.map((c) => (
           <div className="row" key={c.account}><span className="mono">{c.account}</span><button className="btn" disabled={busy} onClick={() => disconnect(c.account)}>断开</button></div>
         ))}
-        {!configured && <p className="error">这个版本没有配置 Google OAuth client ID。开发时在项目根目录的 .env.local 里写上 SITEMOMENT_GOOGLE_CLIENT_ID 和 SITEMOMENT_GOOGLE_CLIENT_SECRET（Google Cloud 里「桌面应用」类型的 OAuth 客户端），然后重新运行 make dev。</p>}
+        {!configured && (
+          <p className="error">
+            SiteMoment 还没有配置 Google 登录。请联系站长在后台（sitemoment.com/admx → 桌面客户端）设置。
+            {" "}<button className="btn" disabled={busy} onClick={refreshGoogleConfig}>重新获取</button>
+          </p>
+        )}
         <div className="row"><button className="btn" disabled={!configured} onClick={connect}>{connecting ? "等待浏览器里完成授权…（取消）" : "连接 Google 账号"}</button></div>
       </section>
       <section className="panel">

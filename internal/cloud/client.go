@@ -59,6 +59,32 @@ type Credits struct {
 	Limit float64 `json:"limit"`
 }
 
+// DesktopConfig is the desktop app's central configuration, set by the
+// owner in the admin console (sitemoment.com/admx → 桌面客户端). Fields are
+// empty strings when unset on the backend.
+type DesktopConfig struct {
+	Google struct {
+		ClientID     string `json:"clientId"`
+		ClientSecret string `json:"clientSecret"`
+	} `json:"google"`
+}
+
+// desktopConfigTimeout bounds how long DesktopConfig waits for the backend,
+// regardless of the caller's own context; a var so tests can shorten it
+// instead of sleeping for the real value.
+var desktopConfigTimeout = 10 * time.Second
+
+// DesktopConfig fetches the desktop app's central configuration
+// (GET /v1/desktop/config, no auth: see backend/internal/api). The response
+// body is already size-capped by do's io.LimitReader.
+func (c *Client) DesktopConfig(ctx context.Context) (DesktopConfig, error) {
+	ctx, cancel := context.WithTimeout(ctx, desktopConfigTimeout)
+	defer cancel()
+	var cfg DesktopConfig
+	_, err := c.do(ctx, http.MethodGet, "/v1/desktop/config", "", nil, &cfg)
+	return cfg, err
+}
+
 type tokens struct {
 	AccessToken  string `json:"access_token"`
 	RefreshToken string `json:"refresh_token"`

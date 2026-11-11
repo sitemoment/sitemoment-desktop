@@ -14,14 +14,19 @@ import (
 
 const googleKeyPrefix = "google:"
 
-// ErrGoogleNotConfigured means the build has no Google OAuth client ID.
-var ErrGoogleNotConfigured = errors.New("Google 连接还没有配置：缺少 OAuth client ID")
+// ErrGoogleNotConfigured means no Google OAuth client is available: no
+// env/ldflags override, and the backend's central configuration (or a
+// locally cached copy of it) has not resolved one either.
+var ErrGoogleNotConfigured = errors.New("SiteMoment 还没有配置 Google 登录。请联系站长在后台（sitemoment.com/admx → 桌面客户端）设置。")
 
 // GoogleTokens turns a connected account into access tokens. It is used by
 // the sync and is deliberately not a frontend service.
 type GoogleTokens struct {
 	OAuth   *google.OAuth
 	Secrets secret.Store
+	// Config, when set, is tried (with a short timeout) before giving up on
+	// a token refresh that finds no OAuth client configured yet.
+	Config *GoogleConfig
 }
 
 // AccessToken implements gscsync.TokenSource.
@@ -32,6 +37,9 @@ func (g *GoogleTokens) AccessToken(ctx context.Context, account string) (string,
 	}
 	if err != nil {
 		return "", err
+	}
+	if g.Config != nil {
+		g.Config.peek(ctx)
 	}
 	return g.OAuth.AccessToken(ctx, rt)
 }
@@ -45,13 +53,39 @@ type GoogleService struct {
 	Store   *store.Store
 	Secrets secret.Store
 	Open    Opener
+	// Config, when set, resolves the OAuth client from the backend: a
+	// background fetch at startup (main.go), and an on-demand short-timeout
+	// attempt here whenever nothing is configured yet.
+	Config *GoogleConfig
 }
 
-// Configured reports whether Google connection is available in this build.
-func (g *GoogleService) Configured() bool { return g.OAuth.Configured() }
+// Configured reports whether a Google OAuth client is available: the
+// env/ldflags override, or the backend's central configuration (fetched in
+// the background at startup, cached locally). When neither is known yet it
+// makes one short on-demand attempt to fetch the backend's config first.
+func (g *GoogleService) Configured(ctx context.Context) bool {
+	if g.Config != nil {
+		g.Config.peek(ctx)
+	}
+	return g.OAuth.Configured()
+}
+
+// RefreshConfig re-fetches the backend's configuration right away (the
+// Settings page's "重新获取" button) and reports whether a client is
+// configured afterwards.
+func (g *GoogleService) RefreshConfig(ctx context.Context) (bool, error) {
+	if g.Config == nil {
+		return g.OAuth.Configured(), nil
+	}
+	err := g.Config.Refresh(ctx)
+	return g.OAuth.Configured(), err
+}
 
 // Connect runs the Google consent flow in the browser and stores the account.
 func (g *GoogleService) Connect(ctx context.Context) (store.Connection, error) {
+	if g.Config != nil {
+		g.Config.peek(ctx)
+	}
 	if !g.OAuth.Configured() {
 		return store.Connection{}, ErrGoogleNotConfigured
 	}
