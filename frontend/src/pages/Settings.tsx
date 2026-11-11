@@ -6,6 +6,8 @@ import { fmtBytes } from "../format";
 import { UpdatePanel } from "../components/UpdatePanel";
 import { NotifyPanel } from "../components/NotifyPanel";
 import { PrivacyPanel } from "../components/PrivacyPanel";
+import { NetworkPanel } from "../components/NetworkPanel";
+import { GoogleAuthLink } from "../components/GoogleAuthLink";
 import type { Account, Connection, Info, Site } from "../types";
 
 // WKWebView (Wails' macOS webview) has no WKUIDelegate hookup for the JS
@@ -115,6 +117,7 @@ export function SettingsPage(props: {
           </p>
         )}
         <div className="row"><button className="btn" disabled={!configured} onClick={connect}>{connecting ? "等待浏览器里完成授权…（取消）" : "连接 Google 账号"}</button></div>
+        <GoogleAuthLink active={connecting} />
       </section>
       <section className="panel">
         <h2>Bing Webmaster</h2>
@@ -138,6 +141,7 @@ export function SettingsPage(props: {
           </div>
         ))}
       </section>
+      <NetworkPanel />
       <UpdatePanel />
       <NotifyPanel />
       <PrivacyPanel />

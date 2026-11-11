@@ -1,4 +1,4 @@
-import { Browser, Events, type CancellablePromise } from "@wailsio/runtime";
+import { Browser, Clipboard, Events, type CancellablePromise } from "@wailsio/runtime";
 import {
   AccountService, AgentService, BingService, CollectorService, GoogleService, HealthService, InfoService, KeywordService, ModelService, NoticeService,
   OverviewService, ReportService, SiteService, SyncService, TaskService,
@@ -10,8 +10,8 @@ import type {
 } from "./types";
 import { Service as UpdateService } from "../bindings/github.com/sitemoment/sitemoment-desktop/internal/updates";
 import type { UpdateStatus } from "./types";
-import { NotifyService } from "../bindings/github.com/sitemoment/sitemoment-desktop/internal/app";
-import type { NotifySettings } from "./types";
+import { NetworkService, NotifyService } from "../bindings/github.com/sitemoment/sitemoment-desktop/internal/app";
+import type { NotifySettings, Probe, ProxyStatus } from "./types";
 
 // The generated bindings (typed via `wails3 generate bindings -ts -i`) return
 // CancellablePromise of generated model types that are structurally the same
@@ -116,7 +116,12 @@ export const api = {
   deleteReport: (id: number) => call<void>(ReportService.Delete(id)),
   notices: () => call<NoticeList>(NoticeService.List()),
   markNoticeRead: (id: number) => call<void>(NoticeService.MarkRead(id)),
+  proxyStatus: () => call<ProxyStatus>(NetworkService.Status()),
+  testNetwork: () => call<Probe[]>(NetworkService.Test()),
 };
+
+/** Copies text with the native clipboard (WKWebView may refuse navigator.clipboard). */
+export const copyText = (text: string) => Clipboard.SetText(text);
 
 /** Opens an http(s) link in the system browser; anything else is ignored. */
 export function openURL(href: string) {
@@ -153,6 +158,6 @@ export const errText = (e: unknown) => {
   // The model's own messages are already Chinese; just drop the "llm: " prefix.
   if (msg.includes("模型回复太长，已中止")) return "模型回复太长，已中止";
   if (msg.includes("模型回复中断")) return "模型回复中断";
-  if (isNetworkError(msg)) return "网络连接失败，请检查网络";
+  if (isNetworkError(msg)) return "网络连接失败，请检查网络（设置 → 网络代理 里可以测试连接）";
   return msg;
 };

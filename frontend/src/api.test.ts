@@ -19,9 +19,15 @@ describe("errText", () => {
     );
   });
   it("translates network failures", () => {
-    expect(errText(new Error("dial tcp 127.0.0.1:443: connect: connection refused"))).toBe("网络连接失败，请检查网络");
-    expect(errText(new Error("lookup sitemoment.com: no such host"))).toBe("网络连接失败，请检查网络");
-    expect(errText(new Error("read tcp 127.0.0.1:443: i/o timeout"))).toBe("网络连接失败，请检查网络");
+    expect(errText(new Error("dial tcp 127.0.0.1:443: connect: connection refused"))).toBe("网络连接失败，请检查网络（设置 → 网络代理 里可以测试连接）");
+    expect(errText(new Error("lookup sitemoment.com: no such host"))).toBe("网络连接失败，请检查网络（设置 → 网络代理 里可以测试连接）");
+    expect(errText(new Error("read tcp 127.0.0.1:443: i/o timeout"))).toBe("网络连接失败，请检查网络（设置 → 网络代理 里可以测试连接）");
+  });
+  it("keeps the Google connect messages as the Go side wrote them", () => {
+    for (const m of [
+      "浏览器里没有完成 Google 授权（5 分钟超时）。如果页面提示「访问被阻止」，请让站长把你的 Google 账号加进测试用户；如果打不开 Google，请检查 设置 → 网络代理。",
+      "你在浏览器里取消了授权，或这个 Google 账号不在测试用户名单里",
+    ]) expect(errText(new Error(m))).toBe(m);
   });
   it("passes through an unrecognized message unchanged", () => {
     expect(errText(new Error("gscsync: site has no Search Console property"))).toBe(
