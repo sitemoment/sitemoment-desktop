@@ -65,6 +65,27 @@ func TestGSCQueryTool(t *testing.T) {
 	}
 }
 
+func TestWindowRejectsFromOnlyFutureDatesAndTooLongRanges(t *testing.T) {
+	env := siteEnv(t, &Deps{})
+	ok(t, env.Store.ReplaceGSC(ctx, env.Site.ID, "date", "2026-10-01", "2026-11-08", nil, 1))
+	// env.Now (set by siteEnv) is 2026-11-10 09:00 UTC.
+	if _, err := runGSCQuery(ctx, env, map[string]any{"from": "2026-10-01"}); err == nil {
+		t.Fatal("accepted from without to")
+	}
+	if _, err := runGSCQuery(ctx, env, map[string]any{"to": "2026-11-08"}); err == nil {
+		t.Fatal("accepted to without from")
+	}
+	if _, err := runGSCQuery(ctx, env, map[string]any{"from": "2026-10-01", "to": "2026-12-31"}); err == nil {
+		t.Fatal("accepted a to date in the future")
+	}
+	if _, err := runGSCQuery(ctx, env, map[string]any{"from": "2024-01-01", "to": "2026-11-08"}); err == nil {
+		t.Fatal("accepted a range over 480 days")
+	}
+	if _, err := runGSCQuery(ctx, env, map[string]any{"from": "2026-11-01", "to": "2026-11-08"}); err != nil {
+		t.Fatalf("rejected a normal explicit range: %v", err)
+	}
+}
+
 func TestKeywordsTool(t *testing.T) {
 	env := siteEnv(t, &Deps{})
 	kw, err := env.Store.AddKeyword(ctx, env.Site.ID, "AI Thumbnail", store.KindTarget, 1)

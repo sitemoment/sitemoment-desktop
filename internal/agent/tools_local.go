@@ -79,14 +79,23 @@ func window(ctx context.Context, env *Env, source, slice, name string, args map[
 	from, to = argString(args, "from"), argString(args, "to")
 	parse := func(s string) (time.Time, error) { return time.Parse(store.DayLayout, s) }
 	var f, t time.Time
-	if from != "" && to != "" {
+	switch {
+	case from != "" && to != "":
 		if f, err = parse(from); err == nil {
 			t, err = parse(to)
 		}
 		if err != nil || t.Before(f) {
 			return "", "", "", "", errors.New("from / to 要是 YYYY-MM-DD，且 from 不晚于 to")
 		}
-	} else {
+		if today := env.now().Format(store.DayLayout); to > today {
+			return "", "", "", "", errors.New("to 不能晚于今天")
+		}
+		if days := int(t.Sub(f).Hours()/24) + 1; days > 480 {
+			return "", "", "", "", errors.New("from 到 to 最多 480 天")
+		}
+	case from != "" || to != "":
+		return "", "", "", "", errors.New("from 和 to 要一起给")
+	default:
 		latest, lerr := env.Store.LatestDay(ctx, env.Site.ID, source, slice)
 		if lerr != nil {
 			return "", "", "", "", lerr
