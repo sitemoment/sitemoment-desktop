@@ -192,7 +192,7 @@ func syncMessage(err error) string {
 	case errors.Is(err, google.ErrReauth):
 		return "Google 授权已失效，请在设置里重新连接"
 	case errors.Is(err, google.ErrRateLimited):
-		return "Search Console 限流，下次同步会继续"
+		return "Google 接口限流，稍后自动重试"
 	case errors.Is(err, gscsync.ErrNotBound):
 		return "还没有选择 Search Console 资源"
 	default:
