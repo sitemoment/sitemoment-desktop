@@ -5,9 +5,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
+	"testing/fstest"
 	"time"
 
 	"github.com/sitemoment/sitemoment-desktop/internal/store"
@@ -147,6 +149,74 @@ func TestRunnerPostHook(t *testing.T) {
 	}
 	if res, _ := e.r.Run(ctx, "builtin-one", map[string]any{"q": "a"}); string(res.Data) != `{"post":true}` {
 		t.Fatalf("cache kept %s", res.Data)
+	}
+}
+
+// twoHostFS has two built-in collectors sharing a host: builtin-one is the
+// strict one (minGapSeconds 10, dailyLimit 50, matching goodManifest),
+// builtin-two is laxer on paper (minGapSeconds 3, dailyLimit 200) but
+// shares builtin-one's host, so it must be clamped to the same floor.
+func twoHostFS() fstest.MapFS {
+	one := strings.NewReplacer(`"demo-serp"`, `"builtin-one"`, `"演示"`, `"内置一"`).Replace(goodManifest)
+	two := strings.NewReplacer(`"demo-serp"`, `"builtin-two"`, `"演示"`, `"内置二"`,
+		`"minGapSeconds":10,"dailyLimit":50`, `"minGapSeconds":3,"dailyLimit":200`).Replace(goodManifest)
+	return fstest.MapFS{
+		"builtin-one/manifest.json": {Data: []byte(one)},
+		"builtin-one/schema.json":   {Data: []byte(testSchema)},
+		"builtin-one/collector.js":  {Data: []byte("sm.done({});")},
+		"builtin-two/manifest.json": {Data: []byte(two)},
+		"builtin-two/schema.json":   {Data: []byte(testSchema)},
+		"builtin-two/collector.js":  {Data: []byte("sm.done({});")},
+	}
+}
+
+func TestRunnerSharesSpacingAndDailyLimitPerHost(t *testing.T) {
+	st := openStore(t)
+	cat := &Catalog{Builtin: twoHostFS(), Store: st}
+	if err := cat.Reload(ctx); err != nil {
+		t.Fatal(err)
+	}
+	loader := &fakeLoader{}
+	var mu sync.Mutex
+	now := time.Date(2026, 11, 10, 9, 0, 0, 0, time.Local)
+	var waits []time.Duration
+	r := &Runner{Store: st, Catalog: cat, Browser: loader,
+		Now:  func() time.Time { mu.Lock(); defer mu.Unlock(); return now },
+		Rand: func() float64 { return 0 },
+		Wait: func(_ context.Context, d time.Duration) error {
+			mu.Lock()
+			waits = append(waits, d)
+			now = now.Add(d)
+			mu.Unlock()
+			return nil
+		},
+	}
+	advance := func(d time.Duration) { mu.Lock(); now = now.Add(d); mu.Unlock() }
+
+	if _, err := r.Run(ctx, "builtin-one", map[string]any{"q": "a"}); err != nil {
+		t.Fatal(err)
+	}
+	// builtin-two's own minGapSeconds is 3, but builtin-one (sharing the
+	// host) declares 10: the floor wins.
+	if _, err := r.Run(ctx, "builtin-two", map[string]any{"q": "b"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(waits) != 1 || waits[0] != 10*time.Second {
+		t.Fatalf("minGap floor not applied: waits = %v", waits)
+	}
+
+	// builtin-two's own dailyLimit is 200, but the shared floor (from
+	// builtin-one) is 50, and the two runs above already count against
+	// it together: 48 more on builtin-two should exactly reach it.
+	for i := 0; i < 48; i++ {
+		advance(10 * time.Second)
+		if _, err := r.Run(ctx, "builtin-two", map[string]any{"q": fmt.Sprintf("q%d", i)}); err != nil {
+			t.Fatalf("run %d: %v", i, err)
+		}
+	}
+	advance(10 * time.Second)
+	if _, err := r.Run(ctx, "builtin-one", map[string]any{"q": "over the shared floor"}); !errors.Is(err, ErrDailyLimit) {
+		t.Fatalf("shared daily floor (50) not enforced after 50 runs across both collectors: %v", err)
 	}
 }
 

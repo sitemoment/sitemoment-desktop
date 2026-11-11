@@ -197,6 +197,44 @@ func (c *Catalog) Get(id string) (*Collector, bool) {
 	return col, ok
 }
 
+// hostFloor is the strictest minGapSeconds (max) and dailyLimit (min)
+// among every enabled collector whose Host is host, built-in or not: the
+// shared budget a run against that real site must respect regardless of
+// which collector made the request. A built-in collector using the host
+// is included like any other, so it always sets at least as strict a
+// floor as its own manifest already asked for; a user collector sharing
+// the host can only make the shared budget stricter, never looser.
+func (c *Catalog) hostFloor(host string) (minGapSeconds, dailyLimit int) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	for _, col := range c.enabled {
+		if col.Host() != host {
+			continue
+		}
+		if col.MinGapSeconds > minGapSeconds {
+			minGapSeconds = col.MinGapSeconds
+		}
+		if dailyLimit == 0 || col.DailyLimit < dailyLimit {
+			dailyLimit = col.DailyLimit
+		}
+	}
+	return
+}
+
+// collectorsForHost returns the ids of enabled collectors whose Host is
+// host, for summing a shared daily count across all of them.
+func (c *Catalog) collectorsForHost(host string) []string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	var ids []string
+	for _, col := range c.enabled {
+		if col.Host() == host {
+			ids = append(ids, col.ID)
+		}
+	}
+	return ids
+}
+
 // Approve records the user's permission for a user collector to read its
 // hosts (this version only) and reloads.
 func (c *Catalog) Approve(ctx context.Context, id string) error {

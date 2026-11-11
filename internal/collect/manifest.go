@@ -66,7 +66,16 @@ type Collector struct {
 	Script      string
 	Builtin     bool
 	params      inputSchema
+	host        string // the URL template's host, set by checkURL
 }
+
+// Host is the exact host this collector's page is on (the one host from
+// the URL template, not the full, possibly broader, Hosts list that
+// Verify uses for message origins). Runner shares spacing and daily-limit
+// state across every enabled collector with the same Host, built-in or
+// not, so a user collector can't get a laxer budget against a site a
+// built-in already paces.
+func (c *Collector) Host() string { return c.host }
 
 var (
 	idPattern   = regexp.MustCompile(`^[a-z][a-z0-9-]{1,40}$`)
@@ -196,6 +205,7 @@ func (c *Collector) checkURL() error {
 	if err != nil || u.Port() != "" || !slices.Contains(c.Hosts, u.Hostname()) {
 		return errors.New("url 的域名必须是 hosts 里的一个，且不能带端口")
 	}
+	c.host = u.Hostname()
 	return nil
 }
 

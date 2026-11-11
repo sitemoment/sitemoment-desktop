@@ -116,16 +116,17 @@ func (r *Runner) emit(name string, data any) {
 	}
 }
 
-// lock serializes runs of one collector; it waits for its turn or ctx.
-func (r *Runner) lock(ctx context.Context, id string) (func(), error) {
+// lock serializes runs against one host (shared by every collector that
+// targets it); it waits for its turn or ctx.
+func (r *Runner) lock(ctx context.Context, host string) (func(), error) {
 	r.mu.Lock()
 	if r.locks == nil {
 		r.locks, r.last, r.windows = map[string]chan struct{}{}, map[string]time.Time{}, map[int64]string{}
 	}
-	ch := r.locks[id]
+	ch := r.locks[host]
 	if ch == nil {
 		ch = make(chan struct{}, 1)
-		r.locks[id] = ch
+		r.locks[host] = ch
 	}
 	r.queued++
 	r.mu.Unlock()
@@ -170,7 +171,15 @@ func (r *Runner) Run(ctx context.Context, id string, input map[string]any) (Resu
 	if res, ok, err := r.cached(ctx, c, hash); ok || err != nil {
 		return res, err
 	}
-	unlock, err := r.lock(ctx, c.ID)
+	pageURL, err := c.PageURL(in)
+	if err != nil {
+		return Result{}, err
+	}
+	// Spacing and the daily limit are shared by every collector that
+	// targets this host, not just this one: the real site on the other
+	// end doesn't know or care which of our collectors is asking.
+	host := c.Host()
+	unlock, err := r.lock(ctx, host)
 	if err != nil {
 		return Result{}, err
 	}
@@ -180,27 +189,54 @@ func (r *Runner) Run(ctx context.Context, id string, input map[string]any) (Resu
 		return res, err
 	}
 	now := r.now()
-	n, err := r.Store.CollectorRunsSince(ctx, c.ID, startOfDay(now))
+	minGap, dailyLimit := r.effectiveLimits(c, host)
+	n, err := r.hostRunsSince(ctx, host, startOfDay(now))
 	if err != nil {
 		return Result{}, err
 	}
-	if n >= c.DailyLimit {
+	if n >= dailyLimit {
 		return Result{}, ErrDailyLimit
 	}
 	r.mu.Lock()
-	last := r.last[c.ID]
+	last := r.last[host]
 	r.mu.Unlock()
-	gap := time.Duration(c.MinGapSeconds)*time.Second + time.Duration(r.rand()*float64(c.JitterSeconds)*float64(time.Second))
+	gap := time.Duration(minGap)*time.Second + time.Duration(r.rand()*float64(c.JitterSeconds)*float64(time.Second))
 	if d := last.Add(gap).Sub(now); !last.IsZero() && d > 0 {
 		if err := r.wait(ctx, d); err != nil {
 			return Result{}, err
 		}
 	}
-	pageURL, err := c.PageURL(in)
-	if err != nil {
-		return Result{}, err
+	return r.run(ctx, c, in, hash, canon, pageURL, host)
+}
+
+// effectiveLimits is c's own minGapSeconds/dailyLimit, clamped to at least
+// as strict as hostFloor(host): no collector can be laxer than the
+// strictest one sharing its host.
+func (r *Runner) effectiveLimits(c *Collector, host string) (minGapSeconds, dailyLimit int) {
+	minGapSeconds, dailyLimit = c.MinGapSeconds, c.DailyLimit
+	floorGap, floorLimit := r.Catalog.hostFloor(host)
+	if floorGap > minGapSeconds {
+		minGapSeconds = floorGap
 	}
-	return r.run(ctx, c, in, hash, canon, pageURL)
+	if floorLimit > 0 && floorLimit < dailyLimit {
+		dailyLimit = floorLimit
+	}
+	return
+}
+
+// hostRunsSince sums the real runs since since across every enabled
+// collector sharing host, the shared count effectiveLimits' dailyLimit is
+// checked against.
+func (r *Runner) hostRunsSince(ctx context.Context, host string, since int64) (int, error) {
+	total := 0
+	for _, id := range r.Catalog.collectorsForHost(host) {
+		n, err := r.Store.CollectorRunsSince(ctx, id, since)
+		if err != nil {
+			return 0, err
+		}
+		total += n
+	}
+	return total, nil
 }
 
 func (r *Runner) cached(ctx context.Context, c *Collector, hash string) (Result, bool, error) {
@@ -214,7 +250,7 @@ func (r *Runner) cached(ctx context.Context, c *Collector, hash string) (Result,
 	return Result{RunID: run.ID, Collector: c.ID, Data: json.RawMessage(run.Result), Cached: true, FetchedAt: run.FinishedAt}, true, nil
 }
 
-func (r *Runner) run(ctx context.Context, c *Collector, in map[string]any, hash, canon, pageURL string) (Result, error) {
+func (r *Runner) run(ctx context.Context, c *Collector, in map[string]any, hash, canon, pageURL, host string) (Result, error) {
 	db := context.WithoutCancel(ctx)
 	started := r.now()
 	runID, err := r.Store.InsertCollectorRun(db, c.ID, hash, canon, started.Unix())
@@ -222,7 +258,7 @@ func (r *Runner) run(ctx context.Context, c *Collector, in map[string]any, hash,
 		return Result{}, err
 	}
 	r.mu.Lock()
-	r.last[c.ID] = started
+	r.last[host] = started
 	r.running++
 	r.mu.Unlock()
 	r.emitRun(db, runID)
