@@ -8,10 +8,10 @@
 			"FileVersion": "0.1.0",
 			"ProductVersion": "0.1.0",
 			"CompanyName": "SiteMoment",
-			"FileDescription": "A sitemoment-desktop application",
-			"LegalCopyright": "© 2026, My Company",
+			"FileDescription": "SiteMoment Desktop",
+			"LegalCopyright": "© 2026 SiteMoment",
 			"ProductName": "SiteMoment",
-			"Comments": "This is a comment"
+			"Comments": "SiteMoment Desktop, AGPL-3.0-or-later"
 		}
 	}
 }
