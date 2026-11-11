@@ -6,6 +6,7 @@ import (
 	"errors"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -457,5 +458,39 @@ func TestSyncSiteRefetchesTailDayOnceDataArrives(t *testing.T) {
 	}
 	if len(got) != 1 || got[0].Impressions != 50 {
 		t.Fatalf("after data arrives: %+v, want one row with 50 impressions", got)
+	}
+}
+
+// TestSyncSiteReturnsCtxErrWhenCanceledBetweenSpans checks that runSpans
+// reports the cancellation even when it happened only after some spans
+// were already sent (not just when canceled before anything started):
+// otherwise a Stop landing mid-slice would look like a clean, empty
+// success and SyncSite would carry on to the next slice.
+func TestSyncSiteReturnsCtxErrWhenCanceledBetweenSpans(t *testing.T) {
+	st, site := setup(t)
+	cctx, cancel := context.WithCancel(ctx)
+	t.Cleanup(cancel)
+	var calls int32
+	gsc := queryFunc(func(_ context.Context, _, _ string, q google.Query) ([]google.Row, error) {
+		if atomic.AddInt32(&calls, 1) == 2 {
+			cancel() // simulate Stop firing right as the 2nd request finishes
+		}
+		// Big impressions on every day defeat merging, so there are many
+		// independent single-day spans to be in the middle of.
+		var rows []google.Row
+		for d := day(q.Start); !d.After(day(q.End)); d = d.AddDate(0, 0, 1) {
+			rows = append(rows, google.Row{Keys: []string{d.Format("2006-01-02")}, Clicks: 1, Impressions: 9999, Position: 1})
+		}
+		return rows, nil
+	})
+	s := &Syncer{Store: st, Tokens: fakeTokens{}, GSC: gsc, Months: 1, Parallel: 1,
+		Now: func() time.Time { return time.Date(2026, 11, 10, 20, 0, 0, 0, time.UTC) }}
+
+	_, err := s.SyncSite(cctx, site)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+	if n := atomic.LoadInt32(&calls); n < 2 {
+		t.Fatalf("calls = %d, want >= 2 (some spans must have been attempted before the cancellation)", n)
 	}
 }

@@ -370,12 +370,13 @@ func (s *Syncer) runSpans(ctx context.Context, site store.Site, token string, sl
 	if firstErr != nil {
 		return firstErr
 	}
-	// The caller's ctx may already have been done before this call even
-	// started (for example, SyncSite's own ctx was canceled between
-	// slices): nothing ran, but that must not look like a clean, empty
-	// success — the caller needs to know to stop, not move on to the next
-	// slice.
-	if sent == 0 && ctx.Err() != nil {
+	// ctx may have been canceled either before this call even started (for
+	// example, SyncSite's own ctx was canceled between slices, so nothing
+	// was ever sent) or partway through dispatching todo (some spans ran,
+	// the rest never got a worker): either way, not every span was
+	// attempted, and that must not look like a clean, empty success — the
+	// caller needs to know to stop, not move on to the next slice.
+	if sent < len(todo) && ctx.Err() != nil {
 		return ctx.Err()
 	}
 	return nil
