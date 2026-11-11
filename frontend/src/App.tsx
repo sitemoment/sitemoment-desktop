@@ -1,6 +1,7 @@
 import { CancelError } from "@wailsio/runtime";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, errText, isNetworkError, onEvent } from "./api";
+import { AgentPanel } from "./agent/AgentPanel";
 import { AddSite } from "./components/AddSite";
 import { SitesPanel } from "./components/SitesPanel";
 import { StatusBar } from "./components/StatusBar";
@@ -22,6 +23,7 @@ export default function App() {
   const [adding, setAdding] = useState(false);
   const [error, setError] = useState("");
   const [loggingIn, setLoggingIn] = useState(false);
+  const [agentOpen, setAgentOpen] = useState(() => localStorage.getItem("agentOpen") !== "0");
   // Login can block up to 5 minutes if the user abandons the browser; keep the
   // cancellable promise around so the sidebar button can cancel it.
   const loginRef = useRef<ReturnType<typeof api.login> | null>(null);
@@ -84,10 +86,19 @@ export default function App() {
     });
   };
 
+  const toggleAgent = () => setAgentOpen((o) => {
+    localStorage.setItem("agentOpen", o ? "0" : "1");
+    return !o;
+  });
+  const refreshAccount = useCallback(() => { api.account().then(setAccount).catch(() => {}); }, []);
+
   const site = sites.find((s) => s.id === siteId) ?? null;
   return (
     <div className="window">
-      <div className="titlebar"><span className="cmd">SiteMoment · {site?.host ?? "本地 SEO 运营"}</span></div>
+      <div className="titlebar">
+        <span className="cmd">SiteMoment · {site?.host ?? "本地 SEO 运营"}</span>
+        <button className={"agent-toggle" + (agentOpen ? " on" : "")} title={agentOpen ? "收起 Agent" : "打开 Agent"} onClick={toggleAgent}>Agent ◨</button>
+      </div>
       <div className="body">
         <nav className="rail">
           <button className={page === "overview" ? "on" : ""} title="概览" aria-label="概览" onClick={() => setPage("overview")}>◧</button>
@@ -108,11 +119,12 @@ export default function App() {
           ) : !site ? (
             <div className="content"><div className="empty">还没有站点。<button className="btn primary" onClick={() => setAdding(true)}>添加第一个站点</button></div></div>
           ) : page === "keywords" ? (
-            <KeywordsPage key={site.id} site={site} account={account} onCreditsUsed={() => api.account().then(setAccount).catch(() => {})} />
+            <KeywordsPage key={site.id} site={site} account={account} onCreditsUsed={refreshAccount} />
           ) : (
             <OverviewPage key={site.id} site={site} status={statuses[site.id]} onChanged={reloadSites} />
           )}
         </main>
+        {agentOpen && <AgentPanel site={site} account={account} onOpenSettings={() => setPage("settings")} onCreditsUsed={refreshAccount} />}
       </div>
       <StatusBar status={site ? statuses[site.id] : undefined} progress={site ? progress[site.id] ?? null : null} info={info} siteId={site?.id} account={account} />
       {adding && (
