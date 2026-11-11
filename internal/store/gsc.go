@@ -23,14 +23,6 @@ type GSCRow struct {
 // ReplaceGSC replaces a slice's rows for days [from, through] and records
 // every one of those days as fetched at fetchedAt, even days without rows.
 func (s *Store) ReplaceGSC(ctx context.Context, siteID int64, slice, from, through string, rows []GSCRow, fetchedAt int64) error {
-	start, err := time.Parse(DayLayout, from)
-	if err != nil {
-		return err
-	}
-	end, err := time.Parse(DayLayout, through)
-	if err != nil {
-		return err
-	}
 	perDay := map[string]int{}
 	for _, r := range rows {
 		perDay[r.Day]++
@@ -50,16 +42,30 @@ func (s *Store) ReplaceGSC(ctx context.Context, siteID int64, slice, from, throu
 				return err
 			}
 		}
-		for d := start; !d.After(end); d = d.AddDate(0, 0, 1) {
-			day := d.Format(DayLayout)
-			if _, err := tx.ExecContext(ctx, "INSERT INTO sync_days (site_id, source, slice, day, rows, fetched_at) VALUES (?, 'gsc', ?, ?, ?, ?) "+
-				"ON CONFLICT(site_id, source, slice, day) DO UPDATE SET rows = excluded.rows, fetched_at = excluded.fetched_at",
-				siteID, slice, day, perDay[day], fetchedAt); err != nil {
-				return err
-			}
-		}
-		return nil
+		return recordDays(ctx, tx, siteID, "gsc", slice, from, through, perDay, fetchedAt)
 	})
+}
+
+// recordDays marks every day in [from, through] of a source's slice as
+// fetched at fetchedAt with perDay[day] rows (0 for days without rows).
+func recordDays(ctx context.Context, tx *sql.Tx, siteID int64, source, slice, from, through string, perDay map[string]int, fetchedAt int64) error {
+	start, err := time.Parse(DayLayout, from)
+	if err != nil {
+		return err
+	}
+	end, err := time.Parse(DayLayout, through)
+	if err != nil {
+		return err
+	}
+	for d := start; !d.After(end); d = d.AddDate(0, 0, 1) {
+		day := d.Format(DayLayout)
+		if _, err := tx.ExecContext(ctx, "INSERT INTO sync_days (site_id, source, slice, day, rows, fetched_at) VALUES (?, ?, ?, ?, ?, ?) "+
+			"ON CONFLICT(site_id, source, slice, day) DO UPDATE SET rows = excluded.rows, fetched_at = excluded.fetched_at",
+			siteID, source, slice, day, perDay[day], fetchedAt); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // SyncDays maps each fetched day of a slice to when it was fetched.

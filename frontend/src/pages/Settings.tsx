@@ -1,6 +1,6 @@
 import { CancelError } from "@wailsio/runtime";
 import { useEffect, useRef, useState } from "react";
-import { api, errText, type Cancellable } from "../api";
+import { api, errText, signedOut, type Cancellable } from "../api";
 import { fmtBytes } from "../format";
 import type { Account, Connection, Info, Site } from "../types";
 
@@ -21,6 +21,8 @@ export function SettingsPage(props: {
   const [err, setErr] = useState("");
   const [connecting, setConnecting] = useState(false);
   const [confirmId, setConfirmId] = useState<number | null>(null);
+  const [bingKeys, setBingKeys] = useState<Connection[]>([]);
+  const [bingKey, setBingKey] = useState("");
   // Connect can block up to 5 minutes if the user abandons the browser; keep
   // the cancellable promise around so the button can cancel it (see
   // App.tsx's login and BindGSC for the same pattern).
@@ -30,6 +32,7 @@ export function SettingsPage(props: {
   useEffect(() => {
     api.connections().then(setConns);
     api.googleConfigured().then(setConfigured);
+    api.bingKeys().then(setBingKeys);
     return () => { if (confirmTimer.current) clearTimeout(confirmTimer.current); };
   }, []);
 
@@ -38,7 +41,7 @@ export function SettingsPage(props: {
     setErr("");
     try { await fn(); } catch (e) { setErr(errText(e)); } finally { setBusy(false); }
   };
-  const logout = guard(async () => { await api.logout(); props.onAccount({ signedIn: false, email: "", name: "", avatarUrl: "", plan: "" }); });
+  const logout = guard(async () => { await api.logout(); props.onAccount(signedOut); });
   const connect = () => {
     if (connectRef.current) {
       connectRef.current.cancel();
@@ -59,6 +62,12 @@ export function SettingsPage(props: {
     });
   };
   const disconnect = (a: string) => guard(async () => { await api.disconnectGoogle(a); setConns(await api.connections()); })();
+  const addBing = guard(async () => {
+    await api.addBingKey(bingKey);
+    setBingKey("");
+    setBingKeys(await api.bingKeys());
+  });
+  const removeBing = (a: string) => guard(async () => { await api.removeBingKey(a); setBingKeys(await api.bingKeys()); })();
   const remove = (s: Site) => {
     if (confirmId !== s.id) {
       setConfirmId(s.id);
@@ -97,11 +106,22 @@ export function SettingsPage(props: {
         <div className="row"><button className="btn" disabled={!configured} onClick={connect}>{connecting ? "等待浏览器里完成授权…（取消）" : "连接 Google 账号"}</button></div>
       </section>
       <section className="panel">
+        <h2>Bing Webmaster</h2>
+        <p>在 Bing Webmaster Tools 的「设置 → API 访问」里生成 API key，粘贴到这里。key 只保存在系统钥匙串里，一个 key 可以读这个 Bing 账号下的全部站点。关键词工作台的免费搜索量也用它。</p>
+        {bingKeys.map((k) => (
+          <div className="row" key={k.account}><span className="mono">{k.account}</span><button className="btn" disabled={busy} onClick={() => removeBing(k.account)}>删除</button></div>
+        ))}
+        <div className="row">
+          <input className="input" type="password" placeholder="Bing Webmaster API key" value={bingKey} onChange={(e) => setBingKey(e.target.value)} />
+          <button className="btn" disabled={busy || !bingKey.trim()} onClick={addBing}>{busy ? "检查中…" : "添加"}</button>
+        </div>
+      </section>
+      <section className="panel">
         <h2>站点</h2>
         {sites.map((s) => (
           <div className="row" key={s.id}>
             <span className="mono" style={{ minWidth: 220 }}>{s.host}</span>
-            <span>{s.gscProperty || "未绑定"}</span>
+            <span>{[s.gscProperty && "GSC", s.gaProperty && "GA4", s.bingSite && "Bing"].filter(Boolean).join(" · ") || "未绑定数据源"}</span>
             <span style={{ flex: 1 }} />
             <button className="btn" disabled={busy} onClick={() => remove(s)}>{confirmId === s.id ? "再点一次确认删除" : "删除"}</button>
           </div>

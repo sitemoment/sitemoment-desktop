@@ -9,13 +9,17 @@ import (
 	"strings"
 )
 
-// Site is one website the user tracks.
+// Site is one website the user tracks and the data sources bound to it.
 type Site struct {
 	ID            int64  `json:"id"`
 	Host          string `json:"host"`
 	Name          string `json:"name"`
 	GoogleAccount string `json:"googleAccount"`
 	GSCProperty   string `json:"gscProperty"`
+	GAAccount     string `json:"gaAccount"`
+	GAProperty    string `json:"gaProperty"` // "properties/123"
+	BingAccount   string `json:"bingAccount"`
+	BingSite      string `json:"bingSite"` // the site URL as Bing Webmaster lists it
 	CreatedAt     int64  `json:"createdAt"`
 }
 
@@ -51,11 +55,11 @@ func NormalizeHost(raw string) (string, error) {
 	return h, nil
 }
 
-const siteCols = "id, host, name, google_account, gsc_property, created_at"
+const siteCols = "id, host, name, google_account, gsc_property, ga_account, ga_property, bing_account, bing_site, created_at"
 
 func scanSite(row interface{ Scan(...any) error }) (Site, error) {
 	var s Site
-	err := row.Scan(&s.ID, &s.Host, &s.Name, &s.GoogleAccount, &s.GSCProperty, &s.CreatedAt)
+	err := row.Scan(&s.ID, &s.Host, &s.Name, &s.GoogleAccount, &s.GSCProperty, &s.GAAccount, &s.GAProperty, &s.BingAccount, &s.BingSite, &s.CreatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return s, ErrNotFound
 	}
@@ -145,4 +149,47 @@ func (s *Store) Connections(ctx context.Context, kind string) ([]Connection, err
 func (s *Store) DeleteConnection(ctx context.Context, kind, account string) error {
 	_, err := s.db.ExecContext(ctx, "DELETE FROM connections WHERE kind = ? AND account = ?", kind, account)
 	return err
+}
+
+// rebind points a site's source at account and target (accountCol and
+// targetCol are trusted column names). When target changes, the source's
+// local data (purge statements, each taking the site id) and its sync
+// ledger are deleted, so two properties never mix.
+func (s *Store) rebind(ctx context.Context, id int64, accountCol, targetCol, account, target, source string, purge ...string) error {
+	return s.tx(ctx, func(tx *sql.Tx) error {
+		var old string
+		err := tx.QueryRowContext(ctx, "SELECT "+targetCol+" FROM sites WHERE id = ?", id).Scan(&old)
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrNotFound
+		}
+		if err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, "UPDATE sites SET "+accountCol+" = ?, "+targetCol+" = ? WHERE id = ?", account, target, id); err != nil {
+			return err
+		}
+		if old == target {
+			return nil
+		}
+		for _, q := range purge {
+			if _, err := tx.ExecContext(ctx, q, id); err != nil {
+				return err
+			}
+		}
+		_, err = tx.ExecContext(ctx, "DELETE FROM sync_days WHERE site_id = ? AND source = ?", id, source)
+		return err
+	})
+}
+
+// BindGA sets which Google account and GA4 property feed the site; empty
+// strings unbind it.
+func (s *Store) BindGA(ctx context.Context, id int64, account, property string) error {
+	return s.rebind(ctx, id, "ga_account", "ga_property", account, property, "ga", "DELETE FROM ga_facts WHERE site_id = ?")
+}
+
+// BindBing sets which Bing key (by its name) and Bing Webmaster site feed
+// the site; empty strings unbind it.
+func (s *Store) BindBing(ctx context.Context, id int64, account, siteURL string) error {
+	return s.rebind(ctx, id, "bing_account", "bing_site", account, siteURL, "bing",
+		"DELETE FROM bing_daily WHERE site_id = ?", "DELETE FROM bing_queries WHERE site_id = ?", "DELETE FROM bing_pages WHERE site_id = ?")
 }

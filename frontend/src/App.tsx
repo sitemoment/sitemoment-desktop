@@ -4,11 +4,12 @@ import { api, errText, isNetworkError, onEvent } from "./api";
 import { AddSite } from "./components/AddSite";
 import { SitesPanel } from "./components/SitesPanel";
 import { StatusBar } from "./components/StatusBar";
+import { KeywordsPage } from "./pages/Keywords";
 import { OverviewPage } from "./pages/Overview";
 import { SettingsPage } from "./pages/Settings";
 import type { Account, Info, Site, SyncProgress, SyncStatus } from "./types";
 
-type Page = "overview" | "settings";
+type Page = "overview" | "keywords" | "settings";
 
 export default function App() {
   const [account, setAccount] = useState<Account | null>(null);
@@ -90,26 +91,30 @@ export default function App() {
       <div className="body">
         <nav className="rail">
           <button className={page === "overview" ? "on" : ""} title="概览" aria-label="概览" onClick={() => setPage("overview")}>◧</button>
+          <button className={page === "keywords" ? "on" : ""} title="关键词" aria-label="关键词" onClick={() => setPage("keywords")}>⌕</button>
           <button className={"bottom" + (page === "settings" ? " on" : "")} title="设置" aria-label="设置" onClick={() => setPage("settings")}>⚙</button>
         </nav>
         <SitesPanel sites={sites} selected={siteId} statuses={statuses} account={account} loggingIn={loggingIn}
-          onSelect={(id) => { setSiteId(id); setPage("overview"); }} onAdd={() => setAdding(true)} onLogin={login} />
+          onSelect={(id) => { setSiteId(id); setPage((p) => (p === "settings" ? "overview" : p)); }} onAdd={() => setAdding(true)} onLogin={login} />
         <main>
           <div className="tabs">
             <span className={page === "overview" ? "on" : ""}>{site ? `概览 · ${site.host}` : "概览"}</span>
+            <span className={page === "keywords" ? "on" : ""}>关键词</span>
             <span className={page === "settings" ? "on" : ""}>设置</span>
           </div>
           {error && <div className="toolbar error">{error}</div>}
           {page === "settings" ? (
             <SettingsPage account={account} info={info} sites={sites} onAccount={setAccount} onLogin={login} onSitesChanged={reloadSites} />
-          ) : site ? (
-            <OverviewPage key={site.id} site={site} status={statuses[site.id]} onChanged={reloadSites} />
-          ) : (
+          ) : !site ? (
             <div className="content"><div className="empty">还没有站点。<button className="btn primary" onClick={() => setAdding(true)}>添加第一个站点</button></div></div>
+          ) : page === "keywords" ? (
+            <KeywordsPage key={site.id} site={site} account={account} onCreditsUsed={() => api.account().then(setAccount).catch(() => {})} />
+          ) : (
+            <OverviewPage key={site.id} site={site} status={statuses[site.id]} onChanged={reloadSites} />
           )}
         </main>
       </div>
-      <StatusBar status={site ? statuses[site.id] : undefined} progress={site ? progress[site.id] ?? null : null} info={info} siteId={site?.id} />
+      <StatusBar status={site ? statuses[site.id] : undefined} progress={site ? progress[site.id] ?? null : null} info={info} siteId={site?.id} account={account} />
       {adding && (
         <AddSite onCancel={() => setAdding(false)} onDone={async (s) => { setAdding(false); await reloadSites(); setSiteId(s.id); setPage("overview"); }} />
       )}

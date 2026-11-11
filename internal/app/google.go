@@ -40,6 +40,7 @@ func (g *GoogleTokens) AccessToken(ctx context.Context, account string) (string,
 type GoogleService struct {
 	OAuth   *google.OAuth
 	GSC     *google.GSC
+	GA      *google.GA
 	Tokens  *GoogleTokens
 	Store   *store.Store
 	Secrets secret.Store
@@ -104,4 +105,13 @@ func (g *GoogleService) Properties(ctx context.Context, account string) ([]googl
 		return nil, err
 	}
 	return g.GSC.Properties(ctx, tok)
+}
+
+// GAProperties lists the GA4 properties the account can read.
+func (g *GoogleService) GAProperties(ctx context.Context, account string) ([]google.GAProperty, error) {
+	tok, err := g.Tokens.AccessToken(ctx, account)
+	if err != nil {
+		return nil, err
+	}
+	return g.GA.Properties(ctx, tok)
 }

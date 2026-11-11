@@ -52,13 +52,29 @@ main { flex: 1; min-width: 0; display: flex; flex-direction: column; background:
 .seg { display: flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
 .seg button { border: 0; background: none; padding: 3px 9px; color: var(--text-3); font-family: var(--mono); font-size: 11px; }
 .seg button.on { background: var(--surface-2); color: var(--text-1); }
-.content { flex: 1; overflow: auto; padding: 14px; display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 12px; align-content: start; }
-.panel { background: var(--surface-1); border: 1px solid var(--line); border-radius: 8px; padding: 12px; grid-column: span 12; }
+/* grid-auto-rows: max-content is required, not cosmetic: .content scrolls
+   (overflow: auto), and a CSS grid container with non-visible overflow gives
+   its "auto"-sized rows an automatic minimum size of 0, which let a tall
+   item like .kpis get squashed down to its smallest content (just the
+   label line) instead of sizing to its full content height. */
+.content { flex: 1; overflow: auto; padding: 14px; display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); grid-auto-rows: max-content; gap: 12px; align-content: start; }
+/* min-width: 0 overrides the grid item's default min-width: auto, which
+   otherwise takes its minimum from descendants' specified sizes — including
+   the chart's <svg width={px}> — and never lets the column shrink back
+   below whatever pixel width ClicksChart last measured. */
+.panel { background: var(--surface-1); border: 1px solid var(--line); border-radius: 8px; padding: 12px; grid-column: span 12; min-width: 0; }
 .panel h2 { margin: 0 0 8px; font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--text-3); display: flex; justify-content: space-between; font-weight: 600; }
 .panel p { color: var(--text-2); }
 
-.kpis { grid-column: span 12; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+/* No overflow:hidden here: a grid container that clips overflow gets an
+   automatic minimum row/column size of 0 (CSS Grid "automatic minimum size"
+   rule), which let this row collapse to a couple of pixels at some widths.
+   The corner tiles round themselves instead of relying on the container
+   clipping square corners. */
+.kpis { grid-column: span 12; display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: 8px; min-height: max-content; }
 .kpi { background: var(--surface-1); padding: 10px 12px; }
+.kpi:first-child { border-radius: 7px 0 0 7px; }
+.kpi:last-child { border-radius: 0 7px 7px 0; }
 .kpi-label { font-size: 11px; color: var(--text-3); display: flex; justify-content: space-between; }
 .kpi-value { font-family: var(--mono); font-size: 20px; }
 .kpi-foot { display: flex; justify-content: space-between; align-items: center; gap: 6px; }
@@ -73,7 +89,13 @@ main { flex: 1; min-width: 0; display: flex; flex-direction: column; background:
 .legend span, .tip span { display: inline-flex; align-items: center; gap: 6px; }
 .lg { display: inline-block; width: 14px; border-top: 2px solid var(--series-1); }
 .lg-2 { border-top: 2px dashed var(--series-2); }
-.chart-plot { position: relative; height: 200px; }
+/* width: 100% + min-width: 0 make clientWidth follow the panel, not the
+   <svg width={px}> child (a replaced element whose specified width would
+   otherwise set this box's own min-content width — a feedback loop with the
+   ResizeObserver below, which only grows and never shrinks back). overflow:
+   hidden clips the svg during the brief frame before the observer corrects
+   a too-wide measurement, instead of giving .content a horizontal scrollbar. */
+.chart-plot { position: relative; height: 200px; width: 100%; min-width: 0; overflow: hidden; }
 .chart-plot svg { display: block; overflow: visible; }
 .chart-plot .grid { stroke: var(--grid); }
 .chart-plot .axis { fill: var(--text-3); font-size: 11px; }
@@ -118,3 +140,20 @@ main { flex: 1; min-width: 0; display: flex; flex-direction: column; background:
 .settings dl { display: grid; grid-template-columns: 120px 1fr; gap: 6px 12px; margin: 0; }
 .settings dt { color: var(--text-3); }
 .settings dd { margin: 0; font-family: var(--mono); user-select: text; }
+
+.grow { flex: 1; }
+.src-row { display: flex; gap: 8px; align-items: center; padding: 6px 0; border-top: 1px solid var(--line); }
+.src-row:first-of-type { border-top: 0; }
+.src-name { flex: none; width: 120px; color: var(--text-3); }
+.src-row select { min-width: 200px; }
+
+.tag { font-family: var(--mono); font-size: 10.5px; padding: 1px 6px; border-radius: 4px; border: 1px solid; white-space: nowrap; background: none; }
+.tag-target { color: #5fd0e2; border-color: #1b4a55; }
+.tag-found { color: #e3b341; border-color: #4d3b12; }
+.tag-scene { color: #b4a2f7; border-color: #3a2f66; }
+select.tag { min-width: 0; }
+.kw-add textarea { flex: 1; resize: vertical; min-width: 0; }
+.kw-msg { grid-column: span 12; margin: 0; }
+.kwtable td { vertical-align: middle; }
+.kw-notes { min-width: 120px; width: 100%; padding: 2px 6px; }
+.modal-box p { color: var(--text-2); }

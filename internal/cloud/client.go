@@ -49,6 +49,14 @@ type Me struct {
 	Plan struct {
 		Name string `json:"name"`
 	} `json:"plan"`
+	Credits *Credits `json:"credits"`
+}
+
+// Credits is the account's monthly credit pool.
+type Credits struct {
+	Month string  `json:"month"`
+	Used  float64 `json:"used"`
+	Limit float64 `json:"limit"`
 }
 
 type tokens struct {
@@ -135,21 +143,28 @@ func (c *Client) AccessToken(ctx context.Context) (string, error) {
 // Me returns the signed-in account, or ErrSignedOut.
 func (c *Client) Me(ctx context.Context) (Me, error) {
 	var me Me
+	err := c.authed(ctx, http.MethodGet, "/v1/desktop/me", nil, &me)
+	return me, err
+}
+
+// authed sends a request with the access token; on a 401 (revoked or
+// expired early) it drops the token, refreshes and tries once more.
+func (c *Client) authed(ctx context.Context, method, path string, body, out any) error {
 	for attempt := 0; attempt < 2; attempt++ {
 		tok, err := c.AccessToken(ctx)
 		if err != nil {
-			return me, err
+			return err
 		}
-		status, err := c.do(ctx, http.MethodGet, "/v1/desktop/me", tok, nil, &me)
+		status, err := c.do(ctx, method, path, tok, body, out)
 		if status == http.StatusUnauthorized {
 			c.mu.Lock()
-			c.access = "" // revoked or expired early: refresh once
+			c.access = ""
 			c.mu.Unlock()
 			continue
 		}
-		return me, err
+		return err
 	}
-	return me, ErrSignedOut
+	return ErrSignedOut
 }
 
 // Logout revokes the sign-in on the server (best effort) and forgets it.
@@ -185,6 +200,7 @@ type apiError struct {
 	Status  int
 	Code    string
 	Message string
+	raw     json.RawMessage
 }
 
 func (e *apiError) Error() string {
@@ -226,13 +242,15 @@ func (c *Client) do(ctx context.Context, method, path, bearer string, body, out 
 	}
 	if res.StatusCode >= 400 {
 		var e struct {
-			Error struct {
-				Code    string `json:"code"`
-				Message string `json:"message"`
-			} `json:"error"`
+			Error json.RawMessage `json:"error"`
 		}
 		json.Unmarshal(data, &e) // best effort; apiError is still returned on decode failure
-		return res.StatusCode, &apiError{Status: res.StatusCode, Code: e.Error.Code, Message: e.Error.Message}
+		var ce struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		}
+		json.Unmarshal(e.Error, &ce)
+		return res.StatusCode, &apiError{Status: res.StatusCode, Code: ce.Code, Message: ce.Message, raw: e.Error}
 	}
 	if out != nil {
 		if err := json.Unmarshal(data, out); err != nil {

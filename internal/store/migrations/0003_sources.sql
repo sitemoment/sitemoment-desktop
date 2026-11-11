@@ -1,0 +1,16 @@
+ALTER TABLE sites ADD COLUMN ga_account TEXT NOT NULL DEFAULT '';
+ALTER TABLE sites ADD COLUMN ga_property TEXT NOT NULL DEFAULT '';
+ALTER TABLE sites ADD COLUMN bing_account TEXT NOT NULL DEFAULT '';
+ALTER TABLE sites ADD COLUMN bing_site TEXT NOT NULL DEFAULT '';
+
+CREATE TABLE ga_facts (
+  site_id INTEGER NOT NULL REFERENCES sites(id) ON DELETE CASCADE,
+  slice TEXT NOT NULL,
+  day TEXT NOT NULL,
+  dim TEXT NOT NULL DEFAULT '',
+  sessions REAL NOT NULL,
+  users REAL NOT NULL,
+  engaged_sessions REAL NOT NULL,
+  key_events REAL NOT NULL,
+  PRIMARY KEY (site_id, slice, day, dim)
+) WITHOUT ROWID;

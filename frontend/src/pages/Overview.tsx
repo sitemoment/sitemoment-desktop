@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api, errText, onEvent } from "../api";
 import { BindGSC } from "../components/BindGSC";
+import { BindSources } from "../components/BindSources";
 import { ClicksChart } from "../components/ClicksChart";
 import { KpiRow } from "../components/KpiRow";
 import { QueriesTable } from "../components/QueriesTable";
@@ -22,7 +23,7 @@ export function OverviewPage({ site, status, onChanged }: { site: Site; status?:
     let live = true;
     api.overview(site.id, days).then((o) => live && setOv(o)).catch((e) => live && setErr(errText(e)));
     return () => { live = false; };
-  }, [site.id, site.gscProperty, days, status?.at]);
+  }, [site.id, site.gscProperty, site.gaProperty, site.bingSite, days, status?.at]);
 
   const running = status?.state === "running";
   useEffect(() => {
@@ -39,7 +40,13 @@ export function OverviewPage({ site, status, onChanged }: { site: Site; status?:
     return () => { live = false; off(); };
   }, [site.id, site.gscProperty, days, running]);
 
-  if (!site.gscProperty) return <BindGSC site={site} onBound={onChanged} />;
+  if (!site.gscProperty) {
+    return (
+      <BindGSC site={site} onBound={onChanged}>
+        <BindSources site={site} onChanged={onChanged} />
+      </BindGSC>
+    );
+  }
   return (
     <>
       <div className="toolbar">
@@ -78,6 +85,7 @@ export function OverviewPage({ site, status, onChanged }: { site: Site; status?:
             </section>
           </>
         )}
+        <BindSources site={site} onChanged={onChanged} />
       </div>
     </>
   );

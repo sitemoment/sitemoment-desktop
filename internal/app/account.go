@@ -19,13 +19,17 @@ type Opener func(url string) error
 // loginTimeout is how long sign-in waits for the browser.
 const loginTimeout = 5 * time.Minute
 
-// Account is the SiteMoment account shown in the app.
+// Account is the SiteMoment account shown in the app, with this month's
+// credit pool (0/0 when the server does not report one).
 type Account struct {
-	SignedIn  bool   `json:"signedIn"`
-	Email     string `json:"email"`
-	Name      string `json:"name"`
-	AvatarURL string `json:"avatarUrl"`
-	Plan      string `json:"plan"`
+	SignedIn     bool    `json:"signedIn"`
+	Email        string  `json:"email"`
+	Name         string  `json:"name"`
+	AvatarURL    string  `json:"avatarUrl"`
+	Plan         string  `json:"plan"`
+	CreditsMonth string  `json:"creditsMonth"`
+	CreditsUsed  float64 `json:"creditsUsed"`
+	CreditsLimit float64 `json:"creditsLimit"`
 }
 
 // AccountService signs in to SiteMoment.
@@ -43,7 +47,11 @@ func (a *AccountService) Get(ctx context.Context) (Account, error) {
 	if err != nil {
 		return Account{}, err
 	}
-	return Account{SignedIn: true, Email: me.User.Email, Name: me.User.Name, AvatarURL: me.User.AvatarURL, Plan: me.Plan.Name}, nil
+	acct := Account{SignedIn: true, Email: me.User.Email, Name: me.User.Name, AvatarURL: me.User.AvatarURL, Plan: me.Plan.Name}
+	if me.Credits != nil {
+		acct.CreditsMonth, acct.CreditsUsed, acct.CreditsLimit = me.Credits.Month, me.Credits.Used, me.Credits.Limit
+	}
+	return acct, nil
 }
 
 // Login opens the browser and waits for the sign-in to come back.
