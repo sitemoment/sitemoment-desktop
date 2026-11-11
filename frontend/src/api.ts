@@ -8,6 +8,8 @@ import type {
   ModelSettings, NoticeList, Overview, PageFilter, PageList, Property, Report, RunView, SessionView, Site, SiteHealth, SpendMode, SyncStatus,
   TaskView, Transcript,
 } from "./types";
+import { Service as UpdateService } from "../bindings/github.com/sitemoment/sitemoment-desktop/internal/updates";
+import type { UpdateStatus } from "./types";
 
 // The generated bindings (typed via `wails3 generate bindings -ts -i`) return
 // CancellablePromise of generated model types that are structurally the same
@@ -60,6 +62,11 @@ export const api = {
   quoteCloud: (siteId: number, ids: number[]) => call<CloudQuote>(KeywordService.QuoteCloud(siteId, ids)),
   fetchCloud: (siteId: number, ids: number[]) => call<FetchResult>(KeywordService.FetchCloud(siteId, ids)),
   info: () => call<Info>(InfoService.Get()),
+  updateStatus: () => call<UpdateStatus>(UpdateService.Status()),
+  checkUpdate: () => call<UpdateStatus>(UpdateService.Check()),
+  installUpdate: () => call<void>(UpdateService.Install()),
+  restartToUpdate: () => call<void>(UpdateService.Restart()),
+  setAutoUpdate: (on: boolean) => call<UpdateStatus>(UpdateService.SetAuto(on)),
   sessions: (siteId: number) => call<SessionView[]>(AgentService.Sessions(siteId)),
   createSession: (siteId: number) => call<SessionView>(AgentService.Create(siteId)),
   deleteSession: (id: number) => call<void>(AgentService.Delete(id)),

@@ -124,3 +124,11 @@ export interface TaskView {
 export interface Report { id: number; siteId: number; origin: "weekly" | "manual"; from: string; to: string; title: string; markdown: string; html: string; createdAt: number }
 export interface Notice { id: number; siteId: number; kind: string; title: string; body: string; ref: string; read: boolean; createdAt: number }
 export interface NoticeList { items: Notice[]; unread: number }
+
+// Software updates (internal/updates.Status).
+export type UpdateState = "off" | "idle" | "checking" | "uptodate" | "available" | "downloading" | "verifying" | "installing" | "ready" | "error";
+export interface UpdateVersion { version: string; notes: string; url: string; publishedAt: number; size: number }
+export interface UpdateStatus {
+  current: string; state: UpdateState; reason?: string; latest?: UpdateVersion | null;
+  written: number; total: number; stage?: string; error?: string; checkedAt: number; auto: boolean;
+}

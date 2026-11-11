@@ -6,6 +6,7 @@ import { AddSite } from "./components/AddSite";
 import { Notices } from "./components/Notices";
 import { SitesPanel } from "./components/SitesPanel";
 import { StatusBar } from "./components/StatusBar";
+import { UpdateBar } from "./components/UpdateBar";
 import { CollectorsPage } from "./pages/Collectors";
 import { HealthPage } from "./pages/Health";
 import { KeywordsPage } from "./pages/Keywords";
@@ -126,6 +127,7 @@ export default function App() {
   const site = sites.find((s) => s.id === siteId) ?? null;
   return (
     <div className="window">
+      <UpdateBar />
       <div className="titlebar">
         <span className="cmd">SiteMoment · {site?.host ?? "本地 SEO 运营"}</span>
         <button className={"agent-toggle" + (agentOpen ? " on" : "")} title={agentOpen ? "收起 Agent" : "打开 Agent"} onClick={toggleAgent}>Agent ◨</button>

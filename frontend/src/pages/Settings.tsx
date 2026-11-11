@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { api, errText, signedOut, type Cancellable } from "../api";
 import { ModelSettingsPanel } from "../components/ModelSettings";
 import { fmtBytes } from "../format";
+import { UpdatePanel } from "../components/UpdatePanel";
 import type { Account, Connection, Info, Site } from "../types";
 
 // WKWebView (Wails' macOS webview) has no WKUIDelegate hookup for the JS
@@ -129,6 +130,7 @@ export function SettingsPage(props: {
           </div>
         ))}
       </section>
+      <UpdatePanel />
       <section className="panel">
         <h2>本机数据</h2>
         <dl>
