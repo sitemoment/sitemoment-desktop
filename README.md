@@ -18,6 +18,19 @@
 - 深色控制台风格界面（CSS 变量主题，`frontend/src/theme.css`）。
 - 本地 SQLite 存储（`modernc.org/sqlite`），业务逻辑都在不依赖 Wails 的包里，单测覆盖。
 
+**M2 已完成的功能**（分支 `m2`，后端改动在仓库 `sitemoment` 的分支 `desktop-m2`）：
+- GA4：用同一个 Google 授权列出媒体资源（Admin API `accountSummaries`），每个站点绑定一个媒体资源，按天同步会话、用户、互动会话、关键事件，以及着陆页和默认渠道组，回填 16 个月，最近 3 天每 6 小时重拉。
+- Bing Webmaster：在设置里粘贴 API key（存系统钥匙串，名字 `bing-<后4位>`），每个站点绑定一个 Bing 站点；每 12 小时整体刷新每天的流量和按周的查询、页面数据（Bing 只提供最近几个月）。
+- 概览页多出 GA4「会话」和 Bing「点击」KPI；底部「数据源」面板绑定 / 更换 / 解绑 GA4 和 Bing。
+- 关键词工作台：目标词、场景词手动添加，「意外流量」自动取 Search Console 最近 28 天展示量前 200 的查询；每个词显示 GSC 平均排名和展示；「取数 · Bing」用 Bing 关键词数据填搜索量（免费，近 4 周精确匹配）；「取数 · SiteMoment」先报价再确认，用 SiteMoment 数据（web.cafe `lookup_keywords`）填搜索量、KD、CPC，扣本月积分。每个数字都记录来源和日期，付费数据不会被 Bing 数据覆盖。服务端认为某次请求无论如何都会超过单次调用预算时，会在报价和目录里标 `tooLarge`；客户端据此直接拒绝，不会弹出「确认扣积分」的对话框。
+- 状态栏显示本月 SiteMoment 额度（已用 / 总额）。
+
+**M2 已知问题 / 待办**：
+- web.cafe 没有公开 `lookup_keywords` 的响应结构，客户端按常见字段名宽松解析（`internal/cloud/keywords.go`）。第一次真实取数后如果搜索量或 KD 仍显示「—」，在后端数据库看原始响应：`SELECT data FROM seo_cache WHERE endpoint = 'lookup_keywords' ORDER BY fetched_at DESC LIMIT 1`，把实际字段名加进 `volumeKeys` / `kdKeys` / `cpcKeys`。
+- 关键词市场固定为美国 / 英语（`internal/app/keywords.go` 的常量），以后做成站点设置。
+- Bing 的历史保留时长、限流阈值 Microsoft 没有公开，以实际返回为准。
+- [desktop] 相关的积分额度（免费版 / 付费版每月多少积分）是临时数值，还没有和负责人最终确认。
+
 **已知问题 / 待办**：
 - 手工端到端验收（Task 24 Step 2：真实登录、连接负责人自己的 Google 账号、5 个站点同步、和 Search Console 网页对比数字、7d/28d/90d 切换、1440×900 截图和 `design/mockups/2-console.html` 对比）需要负责人的 Google OAuth「桌面应用」客户端和已部署的后端，尚未执行，列为待办。
 - 后端改动（`desktop-auth` 分支）尚未部署，需要走 DevOpsPad 发布流程并经负责人同意。
@@ -35,6 +48,8 @@ wails3 dev
 ```
 
 注意：后端必须经过 `/api` 前缀访问（生产环境 `https://sitemoment.com/api`），因为确认页登录会 POST 到 `/api/auth/desktop/approve`；一个没有 nginx 之类反向代理剥离 `/api` 的裸本地后端无法完成登录。
+
+**Bing Webmaster API key**：Bing Webmaster Tools → 右上角设置 → API 访问 → 生成 API key，复制到 SiteMoment 的「设置 → Bing Webmaster」。
 
 ## 开发
 
