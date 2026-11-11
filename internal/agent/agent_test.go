@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"sync"
@@ -333,6 +334,54 @@ func TestFreeOnlyHidesPaidTools(t *testing.T) {
 	msgs := r.model.requests()[1].Messages
 	if last := msgs[len(msgs)-1]; !strings.Contains(last.Content, "unknown_tool") || r.cloud.dataCalls() != 0 {
 		t.Fatalf("result %+v", last)
+	}
+}
+
+func TestExtraToolCallsBeyondTheStepLimitAreAllAnswered(t *testing.T) {
+	calls := make([]llm.ToolCall, 9)
+	for i := range calls {
+		calls[i] = tc(fmt.Sprintf("c%d", i+1), "load_playbook", `{"topic":"keywords"}`)
+	}
+	r := newRig(t, ModeConfirm, call("", calls...), say("done"))
+	r.send(t, "x")
+
+	reqs := r.model.requests()
+	if len(reqs) != 2 {
+		t.Fatalf("%d model calls", len(reqs))
+	}
+	// The stored assistant message (and what the model sees next) must carry
+	// all 9 calls, or Anthropic's next request is missing a tool_result for
+	// whichever tool_use block got dropped and the session is permanently
+	// broken (400).
+	seen := map[string]int{}
+	for _, m := range reqs[1].Messages {
+		if m.Role == "tool" {
+			seen[m.ToolCallID]++
+			if strings.Contains(m.Content, "interrupted") {
+				t.Errorf("call %s answered with a stand-in instead of a real result: %q", m.ToolCallID, m.Content)
+			}
+		}
+	}
+	if len(seen) != 9 {
+		t.Fatalf("answered call ids %v, want 9", seen)
+	}
+	for i := 1; i <= 9; i++ {
+		id := fmt.Sprintf("c%d", i)
+		if seen[id] != 1 {
+			t.Errorf("call %s answered %d times, want 1", id, seen[id])
+		}
+	}
+	var tooMany bool
+	for _, m := range reqs[1].Messages {
+		if m.Role == "tool" && strings.Contains(m.Content, "too_many_calls") {
+			tooMany = true
+			if m.ToolCallID != "c9" {
+				t.Errorf("too_many_calls on %s, want the 9th call", m.ToolCallID)
+			}
+		}
+	}
+	if !tooMany {
+		t.Error("the 9th call was not answered with too_many_calls")
 	}
 }
 

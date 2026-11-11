@@ -276,9 +276,10 @@ func (a *Agent) loop(ctx context.Context, t *turn, start int) {
 			return
 		}
 		calls := reply.ToolCalls
-		if len(calls) > maxCallsPerStep {
-			calls = calls[:maxCallsPerStep]
-		}
+		// Store every call the model made, trimmed or not: the Native reply
+		// (sent back to Anthropic unchanged) keeps every tool_use block, so
+		// every one of them needs a stored result or the next request is
+		// missing a tool_result and the session is permanently broken.
 		raw, _ := json.Marshal(calls)
 		if _, err := a.Store.AddAgentMessage(ctx, store.AgentMessage{SessionID: t.sess.ID, Turn: t.n, Role: "assistant", Content: reply.Content,
 			ToolCalls: string(raw), Native: string(reply.Native), NativeOf: reply.NativeOf, CreatedAt: a.now().Unix()}); err != nil {
@@ -286,7 +287,15 @@ func (a *Agent) loop(ctx context.Context, t *turn, start int) {
 			return
 		}
 		a.emit(t, "note", map[string]any{"content": strings.TrimSpace(reply.Content)})
-		if paused := a.step(ctx, t, step, calls); paused {
+		toRun := calls
+		if len(calls) > maxCallsPerStep {
+			toRun = calls[:maxCallsPerStep]
+			for _, extra := range calls[maxCallsPerStep:] {
+				a.addToolMessage(ctx, t, extra.ID, jsonText(map[string]string{"error": "too_many_calls",
+					"message": "一步最多处理 8 个工具调用，这个调用被跳过了，请分批请求。"}))
+			}
+		}
+		if paused := a.step(ctx, t, step, toRun); paused {
 			return
 		}
 		if ctx.Err() != nil {
