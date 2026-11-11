@@ -116,14 +116,20 @@ func main() {
 	streamHTTP := &http.Client{} // model answers stream for minutes; each call has its own context deadline
 	cl := &cloud.Client{Base: env("SITEMOMENT_API", cloudBase), HTTP: httpc, Secrets: secrets}
 	oauth := &google.OAuth{
+		// Set only from env/ldflags; empty means "ask the backend" (owner
+		// decision 2026-11-11: central configuration in the admin console,
+		// since other people use the app and may connect multiple Google
+		// Search Console accounts). See app.GoogleConfig.
 		ClientID:     env("SITEMOMENT_GOOGLE_CLIENT_ID", googleClientID),
 		ClientSecret: env("SITEMOMENT_GOOGLE_CLIENT_SECRET", googleClientSecret),
 		HTTP:         httpc,
 	}
+	googleConfig := &app.GoogleConfig{OAuth: oauth, Cloud: cl, Store: st}
+	googleConfig.Load(ctx) // last cached remote config, if any; no network
 	gsc := &google.GSC{HTTP: httpc}
 	ga := &google.GA{HTTP: httpc}
 	bingc := &bing.Client{HTTP: httpc}
-	tokens := &app.GoogleTokens{OAuth: oauth, Secrets: secrets}
+	tokens := &app.GoogleTokens{OAuth: oauth, Secrets: secrets, Config: googleConfig}
 	bingKeys := &app.BingKeys{Secrets: secrets}
 
 	var wapp *application.App
@@ -208,7 +214,7 @@ func main() {
 		Name: "SiteMoment",
 		Services: []application.Service{
 			application.NewService(&app.AccountService{Cloud: cl, Open: open}),
-			application.NewService(&app.GoogleService{OAuth: oauth, GSC: gsc, GA: ga, Tokens: tokens, Store: st, Secrets: secrets, Open: open}),
+			application.NewService(&app.GoogleService{OAuth: oauth, GSC: gsc, GA: ga, Tokens: tokens, Store: st, Secrets: secrets, Open: open, Config: googleConfig}),
 			application.NewService(&app.BingService{Bing: bingc, Store: st, Secrets: secrets}),
 			application.NewService(&app.SiteService{Store: st, Sync: syncSvc.SyncNow}),
 			application.NewService(syncSvc),
@@ -243,6 +249,10 @@ func main() {
 	// Hidden collector windows would keep the app running after the main
 	// window closes.
 	win.OnWindowEvent(events.Common.WindowClosing, func(*application.WindowEvent) { wapp.Quit() })
+	// Resolve the Google OAuth client from the backend without blocking
+	// startup; Configured/Connect/Properties/token refresh also try this on
+	// demand (with a short timeout) if it hasn't resolved yet.
+	go googleConfig.Refresh(ctx)
 	go app.RunSyncLoop(ctx, syncSvc, 6*time.Hour)
 	go updates.Run(ctx, updateSvc, 30*time.Second, time.Hour)
 	// Daily health checks at 08:00 (missed ones as soon as the app is open),

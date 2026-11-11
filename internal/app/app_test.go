@@ -124,6 +124,99 @@ func TestGoogleConnectAndProperties(t *testing.T) {
 	}
 }
 
+// TestGoogleConnectTwoAccounts: nothing in GoogleService may assume a
+// single connected Google account - a user can connect several (e.g. to
+// bind different sites' Search Console to different accounts).
+func TestGoogleConnectTwoAccounts(t *testing.T) {
+	emails := map[string]string{"g1": "a@example.com", "g2": "b@example.com"}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/token":
+			code := r.FormValue("code")
+			email := emails[code]
+			w.Write([]byte(`{"access_token":"at-` + code + `","refresh_token":"rt-` + code + `","expires_in":3600,"scope":"openid email https://www.googleapis.com/auth/webmasters.readonly","id_token":"` + idToken(email) + `"}`))
+		case "/sites":
+			auth := r.Header.Get("Authorization")
+			switch auth {
+			case "Bearer at-g1":
+				w.Write([]byte(`{"siteEntry":[{"siteUrl":"sc-domain:a.example.com","permissionLevel":"siteOwner"}]}`))
+			case "Bearer at-g2":
+				w.Write([]byte(`{"siteEntry":[{"siteUrl":"sc-domain:b.example.com","permissionLevel":"siteOwner"}]}`))
+			default:
+				w.WriteHeader(401)
+			}
+		}
+	}))
+	defer srv.Close()
+	st, sec := openStore(t), secret.NewMemory()
+	oauth := &google.OAuth{ClientID: "cid", TokenURL: srv.URL + "/token", HTTP: srv.Client()}
+	g := &GoogleService{OAuth: oauth, GSC: &google.GSC{HTTP: srv.Client(), Base: srv.URL}, Tokens: &GoogleTokens{OAuth: oauth, Secrets: sec},
+		Store: st, Secrets: sec, Open: browser(t, "g1")}
+
+	conn1, err := g.Connect(ctx)
+	if err != nil || conn1.Account != "a@example.com" {
+		t.Fatalf("Connect #1 = %+v, %v", conn1, err)
+	}
+	g.Open = browser(t, "g2")
+	conn2, err := g.Connect(ctx)
+	if err != nil || conn2.Account != "b@example.com" {
+		t.Fatalf("Connect #2 = %+v, %v", conn2, err)
+	}
+
+	list, err := g.Connections(ctx)
+	if err != nil || len(list) != 2 {
+		t.Fatalf("Connections = %+v, %v, want 2 accounts", list, err)
+	}
+
+	propsA, err := g.Properties(ctx, "a@example.com")
+	if err != nil || len(propsA) != 1 || propsA[0].SiteURL != "sc-domain:a.example.com" {
+		t.Fatalf("Properties(a) = %+v, %v", propsA, err)
+	}
+	propsB, err := g.Properties(ctx, "b@example.com")
+	if err != nil || len(propsB) != 1 || propsB[0].SiteURL != "sc-domain:b.example.com" {
+		t.Fatalf("Properties(b) = %+v, %v", propsB, err)
+	}
+
+	if err := g.Disconnect(ctx, "a@example.com"); err != nil {
+		t.Fatal(err)
+	}
+	list, _ = g.Connections(ctx)
+	if len(list) != 1 || list[0].Account != "b@example.com" {
+		t.Fatalf("connections after disconnecting one of two: %+v", list)
+	}
+}
+
+// TestGoogleServiceResolvesFromBackend: when the build has no env/ldflags
+// Google client, GoogleService.Configured and Connect must fetch it from
+// the SiteMoment backend (GoogleConfig.Cloud) on demand rather than report
+// "not configured" forever.
+func TestGoogleServiceResolvesFromBackend(t *testing.T) {
+	gsrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/token" {
+			w.Write([]byte(`{"access_token":"gat","refresh_token":"grt","expires_in":3600,"scope":"openid email https://www.googleapis.com/auth/webmasters.readonly","id_token":"` + idToken("me@example.com") + `"}`))
+		}
+	}))
+	defer gsrv.Close()
+	csrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"google":{"clientId":"remote-cid","clientSecret":"remote-sec"}}`))
+	}))
+	defer csrv.Close()
+
+	st, sec := openStore(t), secret.NewMemory()
+	oauth := &google.OAuth{TokenURL: gsrv.URL + "/token", HTTP: gsrv.Client()} // no ClientID: nothing configured yet
+	cfg := &GoogleConfig{OAuth: oauth, Cloud: &cloud.Client{Base: csrv.URL, HTTP: csrv.Client()}, Store: st}
+	g := &GoogleService{OAuth: oauth, GSC: &google.GSC{HTTP: gsrv.Client(), Base: gsrv.URL},
+		Tokens: &GoogleTokens{OAuth: oauth, Secrets: sec, Config: cfg}, Store: st, Secrets: sec, Open: browser(t, "g1"), Config: cfg}
+
+	if !g.Configured(ctx) {
+		t.Fatal("Configured = false, want the backend's client to resolve on demand")
+	}
+	conn, err := g.Connect(ctx)
+	if err != nil || conn.Account != "me@example.com" {
+		t.Fatalf("Connect = %+v, %v", conn, err)
+	}
+}
+
 func TestBindTriggersSync(t *testing.T) {
 	st := openStore(t)
 	var synced atomic.Int64
