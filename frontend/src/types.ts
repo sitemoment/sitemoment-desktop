@@ -133,6 +133,10 @@ export interface UpdateStatus {
   written: number; total: number; stage?: string; error?: string; checkedAt: number; auto: boolean;
 }
 
-// Notifications (internal/app.Note, NotifySettings).
-export interface Note { title: string; body: string; kind: "human" | "notice" | "update" | "info" }
+// Notifications (internal/app.Note, NotifySettings). The Go type's Kind also
+// covers "human" and "notice" (a collector needing a CAPTCHA, an M4 notice),
+// but those only ever go through Notifier.OS (the OS notification, not the
+// "notify" event): the frontend only ever receives "update" and "info" notes
+// here, so Toasts' kind union is the narrower one actually seen.
+export interface Note { title: string; body: string; kind: "update" | "info" }
 export interface NotifySettings { native: boolean; available: boolean; reason?: string }
