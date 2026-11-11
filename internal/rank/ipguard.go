@@ -19,7 +19,8 @@ var blockedPrefixes = func() []netip.Prefix {
 		"192.0.2.0/24",    // TEST-NET-1
 		"192.88.99.0/24",  // 6to4 relay anycast
 		"192.168.0.0/16",  // private
-		"198.18.0.0/15",   // benchmarking
+		// 198.18.0.0/15 (benchmarking) is deliberately allowed: proxy tools in
+		// TUN mode with fake-ip DNS (Clash, Surge) answer every lookup from it.
 		"198.51.100.0/24", // TEST-NET-2
 		"203.0.113.0/24",  // TEST-NET-3
 		"224.0.0.0/4",     // multicast
