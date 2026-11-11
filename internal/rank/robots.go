@@ -32,6 +32,7 @@ type robotsRule struct {
 // blocksRoot: it blocks the root when it has "Disallow: /" (or "/*") and no
 // "Allow: /".
 func parseRobots(body []byte) robotsInfo {
+	body = bytes.TrimPrefix(body, []byte("\xEF\xBB\xBF")) // a leading UTF-8 BOM would otherwise glue onto "User-agent" and hide the first group
 	var out robotsInfo
 	var (
 		inStar, prevAgent bool

@@ -11,6 +11,17 @@ import (
 	"testing"
 )
 
+func TestRobotsStripsBOM(t *testing.T) {
+	body := append([]byte("\xEF\xBB\xBF"), []byte("User-agent: *\nDisallow: /private\n")...)
+	ri := parseRobots(body)
+	if ri.allowed("x", "https://e.com/private") {
+		t.Fatal("a leading UTF-8 BOM must not disable the first robots.txt group")
+	}
+	if !ri.allowed("x", "https://e.com/ok") {
+		t.Fatal("an unrelated path should still be allowed")
+	}
+}
+
 func TestRobotsAllowed(t *testing.T) {
 	ri := parseRobots([]byte(`User-agent: *
 Disallow: /private
