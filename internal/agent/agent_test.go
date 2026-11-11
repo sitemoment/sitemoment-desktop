@@ -385,6 +385,29 @@ func TestExtraToolCallsBeyondTheStepLimitAreAllAnswered(t *testing.T) {
 	}
 }
 
+func TestMissingOrDuplicateToolCallIDsAreMadeUnique(t *testing.T) {
+	r := newRig(t, ModeConfirm,
+		call("", tc("", "load_playbook", `{"topic":"keywords"}`), tc("", "load_playbook", `{"topic":"diagnosis"}`)),
+		say("ok"))
+	r.send(t, "x")
+	reqs := r.model.requests()
+	var ids []string
+	for _, m := range reqs[1].Messages {
+		if m.Role == "tool" {
+			ids = append(ids, m.ToolCallID)
+		}
+	}
+	if len(ids) != 2 {
+		t.Fatalf("tool results %v, want 2", ids)
+	}
+	if ids[0] == "" || ids[1] == "" {
+		t.Fatalf("empty tool call id survived: %v", ids)
+	}
+	if ids[0] == ids[1] {
+		t.Fatalf("duplicate tool call ids: %v", ids)
+	}
+}
+
 func TestModelCallsHaveATimeout(t *testing.T) {
 	var gotDeadline bool
 	var dur time.Duration

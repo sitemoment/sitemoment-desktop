@@ -277,6 +277,7 @@ func (a *Agent) loop(ctx context.Context, t *turn, start int) {
 			return
 		}
 		calls := reply.ToolCalls
+		ensureCallIDs(t, step, calls)
 		// Store every call the model made, trimmed or not: the Native reply
 		// (sent back to Anthropic unchanged) keeps every tool_use block, so
 		// every one of them needs a stored result or the next request is
@@ -412,6 +413,23 @@ func (a *Agent) runCalls(ctx context.Context, t *turn, calls []llm.ToolCall) {
 	}
 	for i, c := range calls {
 		a.addToolMessage(ctx, t, c.ID, results[i])
+	}
+}
+
+// ensureCallIDs gives every call a non-empty, unique ID. Some
+// OpenAI-compatible servers omit tool call IDs or repeat "0" for every
+// parallel call (research notes, Task 19); every call is keyed by its ID
+// from here on (stored CallID, tool_call_id, the "answered" map), so a
+// blank or duplicate ID would silently merge two different calls into one.
+func ensureCallIDs(t *turn, step int, calls []llm.ToolCall) {
+	seen := make(map[string]bool, len(calls))
+	for i := range calls {
+		id := strings.TrimSpace(calls[i].ID)
+		if id == "" || seen[id] {
+			id = fmt.Sprintf("t%d-s%d-%d", t.n, step, i)
+		}
+		seen[id] = true
+		calls[i].ID = id
 	}
 }
 
