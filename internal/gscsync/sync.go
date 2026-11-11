@@ -25,7 +25,9 @@ type Querier interface {
 // Limiter additionally paces requests per key (a Google account), on top of
 // MaxRequests and the GSC client's own 429 backoff; *ratelimit.Limiter
 // satisfies this. Acquire blocks until a slot is free, or ctx ends; release
-// must be called exactly once when the request is done.
+// must be called exactly once when the request is done. It is applied per
+// HTTP request (google.Query's OnPage), not once per logical Query, so a
+// query that paginates is still paced correctly.
 type Limiter interface {
 	Acquire(ctx context.Context, key string) (release func(), err error)
 }
@@ -62,30 +64,37 @@ type Result struct {
 	Remaining int `json:"remaining"`
 }
 
-// recentDays and backfillBatch bound the first Search Console backfill so
+// RecentDays and BackfillBatch bound the first Search Console backfill so
 // one SyncSite call never blocks on hundreds of requests: every call keeps
-// the newest recentDays fully up to date (so the overview works right
-// away), and takes at most backfillBatch additional query/page requests of
-// older history, newest-first. The rest of the history (res.Remaining)
-// catches up over later calls (see app.RunBackfillLoop). The date slice's
-// 90-day chunks are cheap enough (about 6 requests for 16 months) to always
-// fetch in full, unbatched. These are constants, not settings, by design:
-// one place to tune them.
+// the newest RecentDays fully up to date (so the overview works right
+// away), and takes at most BackfillBatch additional older-history
+// requests — shared between the query and page slices, not BackfillBatch
+// each — newest-first across both. The rest of the history
+// (res.Remaining) catches up over later calls (see app.RunBackfillLoop).
+// The date slice's 90-day chunks are cheap enough (about 6 requests for 16
+// months) to always fetch in full, unbatched. These are constants, not
+// settings, by design: one place to tune them. Exported so internal/app's
+// progress table can tell a real coverage gap (older than RecentDays) from
+// the ordinary day-by-day lag of a site that is fully caught up.
 const (
-	recentDays    = 28
-	backfillBatch = 20
+	RecentDays    = 28
+	BackfillBatch = 20
 )
 
 // Syncer copies one site's Search Console data into the store.
 type Syncer struct {
-	Store        *store.Store
-	Tokens       TokenSource
-	GSC          Querier
-	Now          func() time.Time // default time.Now
-	Months       int              // history; default 16
-	Tail         int              // newest days re-fetched; default 3
-	RefreshAfter time.Duration    // tail days older than this are re-fetched; default 6h
-	MaxRequests  int              // per SyncSite call; default 200
+	Store  *store.Store
+	Tokens TokenSource
+	GSC    Querier
+	Now    func() time.Time // default time.Now
+	Months int              // history; default 16
+	// Tail is how many of the newest days are re-fetched when stale;
+	// default 5. Kept at least a few days because Search Console finalizes
+	// a day's data late: PlanQueryPage never permanently records a zero
+	// within the tail, only once a day ages out of it.
+	Tail         int
+	RefreshAfter time.Duration // tail days older than this are re-fetched; default 6h
+	MaxRequests  int           // per SyncSite call; default 200
 	// Parallel is how many GSC requests run at once per SyncSite call;
 	// default 4. Store writes are always serialized.
 	Parallel int
@@ -108,10 +117,39 @@ func or[T comparable](v, def T) T {
 	return v
 }
 
+// olderCandidate pairs a query/page older-history span with the slice it
+// belongs to, so the two slices can share one backfill budget (see
+// BackfillBatch) instead of getting one each.
+type olderCandidate struct {
+	sl   Slice
+	span Span
+}
+
+// mergeNewestFirst merges two already newest-first candidate lists into
+// one newest-first list (a standard merge-sort merge step), so capping the
+// combined list at BackfillBatch takes from whichever slice has the newest
+// unfetched history first, not from one slice until it is exhausted.
+func mergeNewestFirst(a, b []olderCandidate) []olderCandidate {
+	out := make([]olderCandidate, 0, len(a)+len(b))
+	i, j := 0, 0
+	for i < len(a) && j < len(b) {
+		if !a[i].span.Through.Before(b[j].span.Through) {
+			out = append(out, a[i])
+			i++
+		} else {
+			out = append(out, b[j])
+			j++
+		}
+	}
+	out = append(out, a[i:]...)
+	out = append(out, b[j:]...)
+	return out
+}
+
 // SyncSite fetches what Plan (or PlanQueryPage) says is missing or stale,
 // up to MaxRequests, keeping the recent window complete and the rest of the
-// history to at most backfillBatch extra query/page requests (see
-// recentDays, backfillBatch).
+// history to at most BackfillBatch extra requests shared between the query
+// and page slices (see RecentDays, BackfillBatch).
 func (s *Syncer) SyncSite(ctx context.Context, site store.Site) (Result, error) {
 	var res Result
 	if site.GSCProperty == "" || site.GoogleAccount == "" {
@@ -125,11 +163,11 @@ func (s *Syncer) SyncSite(ctx context.Context, site store.Site) (Result, error) 
 	from := through.AddDate(0, -or(s.Months, 16), 0)
 	refreshBefore := now.Add(-or(s.RefreshAfter, 6*time.Hour)).Unix()
 	limit := or(s.MaxRequests, 200)
-	tail := or(s.Tail, 3)
+	tail := or(s.Tail, 5)
 	mergeDays := or(s.MergeMaxDays, 7)
 	mergeImpressions := or(s.MergeMaxImpressions, 5000)
 
-	recentFrom := through.AddDate(0, 0, -(recentDays - 1))
+	recentFrom := through.AddDate(0, 0, -(RecentDays - 1))
 	if recentFrom.Before(from) {
 		recentFrom = from
 	}
@@ -139,61 +177,89 @@ func (s *Syncer) SyncSite(ctx context.Context, site store.Site) (Result, error) 
 		return res, err
 	}
 
-	for _, sl := range Slices {
+	// "date": cheap enough (90-day chunks) to always fetch in full.
+	done, err := s.Store.SyncDays(ctx, site.ID, "gsc", "date")
+	if err != nil {
+		return res, err
+	}
+	dateSlice := Slices[0]
+	spans := Plan(done, from, through, tail, refreshBefore, dateSlice.ChunkDays)
+	if err := s.runSpans(ctx, site, token, dateSlice, spans, limit, now, &res); err != nil {
+		return res, err
+	}
+	if err := ctx.Err(); err != nil {
+		return res, err
+	}
+
+	// "query" and "page": each slice's own recent window (RecentDays) is
+	// always synced in full; older history shares one BackfillBatch budget
+	// between the two, newest-first.
+	dateDone, err := s.Store.SyncDays(ctx, site.ID, "gsc", "date")
+	if err != nil {
+		return res, err
+	}
+	dateImpressions, err := s.Store.DayImpressions(ctx, site.ID, from.Format(store.DayLayout), through.Format(store.DayLayout))
+	if err != nil {
+		return res, err
+	}
+
+	type qpState struct {
+		sl         Slice
+		skipSpans  []Span
+		fetchSpans []Span
+		older      []olderCandidate
+	}
+	var qp []*qpState
+	for _, sl := range Slices[1:] {
 		done, err := s.Store.SyncDays(ctx, site.ID, "gsc", sl.Name)
 		if err != nil {
 			return res, err
 		}
-
-		if sl.Name == "date" {
-			spans := Plan(done, from, through, tail, refreshBefore, sl.ChunkDays)
-			if err := s.runSpans(ctx, site, token, sl, spans, limit, now, &res); err != nil {
-				return res, err
-			}
-			continue
-		}
-
-		dateDone, err := s.Store.SyncDays(ctx, site.ID, "gsc", "date")
-		if err != nil {
-			return res, err
-		}
-		dateImpressions, err := s.Store.DayImpressions(ctx, site.ID, from.Format(store.DayLayout), through.Format(store.DayLayout))
-		if err != nil {
-			return res, err
-		}
-
-		var skipSpans, fetchSpans []Span
+		st := &qpState{sl: sl}
 		for _, p := range PlanQueryPage(done, dateDone, dateImpressions, recentFrom, through, tail, refreshBefore, mergeDays, mergeImpressions) {
 			if p.Skip {
-				skipSpans = append(skipSpans, p.Span)
+				st.skipSpans = append(st.skipSpans, p.Span)
 			} else {
-				fetchSpans = append(fetchSpans, p.Span)
+				st.fetchSpans = append(st.fetchSpans, p.Span)
 			}
 		}
 		if recentFrom.After(from) {
 			olderThrough := recentFrom.AddDate(0, 0, -1)
-			var olderFetch []Span
 			for _, p := range PlanQueryPage(done, dateDone, dateImpressions, from, olderThrough, 0, 0, mergeDays, mergeImpressions) {
 				if p.Skip {
-					skipSpans = append(skipSpans, p.Span)
+					st.skipSpans = append(st.skipSpans, p.Span)
 				} else {
-					olderFetch = append(olderFetch, p.Span)
+					st.older = append(st.older, olderCandidate{sl: sl, span: p.Span})
 				}
 			}
-			if len(olderFetch) > backfillBatch {
-				res.Remaining += len(olderFetch) - backfillBatch
-				olderFetch = olderFetch[:backfillBatch]
-			}
-			fetchSpans = append(fetchSpans, olderFetch...)
 		}
+		qp = append(qp, st)
+	}
 
-		for _, sp := range skipSpans {
+	var merged []olderCandidate
+	for _, st := range qp {
+		merged = mergeNewestFirst(merged, st.older)
+	}
+	if len(merged) > BackfillBatch {
+		res.Remaining += len(merged) - BackfillBatch
+		merged = merged[:BackfillBatch]
+	}
+	for _, st := range qp {
+		for _, c := range merged {
+			if c.sl.Name == st.sl.Name {
+				st.fetchSpans = append(st.fetchSpans, c.span)
+			}
+		}
+	}
+
+	for _, st := range qp {
+		for _, sp := range st.skipSpans {
 			start, end := sp.From.Format(store.DayLayout), sp.Through.Format(store.DayLayout)
-			if err := s.Store.ReplaceGSC(ctx, site.ID, sl.Name, start, end, nil, now.Unix()); err != nil {
+			if err := s.Store.ReplaceGSC(ctx, site.ID, st.sl.Name, start, end, nil, now.Unix()); err != nil {
 				return res, err
 			}
 		}
-		if err := s.runSpans(ctx, site, token, sl, fetchSpans, limit, now, &res); err != nil {
+		if err := s.runSpans(ctx, site, token, st.sl, st.fetchSpans, limit, now, &res); err != nil {
 			return res, err
 		}
 	}
@@ -236,6 +302,7 @@ func (s *Syncer) runSpans(ctx context.Context, site store.Site, token string, sl
 		wg       sync.WaitGroup
 		firstErr error
 		done     int
+		sent     int // spans actually handed to a worker, for the ctx-already-done case
 	)
 	jobs := make(chan int)
 	go func() {
@@ -243,6 +310,9 @@ func (s *Syncer) runSpans(ctx context.Context, site store.Site, token string, sl
 		for i := range todo {
 			select {
 			case jobs <- i:
+				mu.Lock()
+				sent++
+				mu.Unlock()
 			case <-reqCtx.Done():
 				return
 			}
@@ -266,19 +336,11 @@ func (s *Syncer) runSpans(ctx context.Context, site store.Site, token string, sl
 				sp := todo[i]
 				start, end := sp.From.Format(store.DayLayout), sp.Through.Format(store.DayLayout)
 
-				var release func()
+				q := google.Query{Start: start, End: end, Dimensions: sl.Dimensions}
 				if s.Limiter != nil {
-					r, err := s.Limiter.Acquire(reqCtx, site.GoogleAccount)
-					if err != nil {
-						fail(err)
-						return
-					}
-					release = r
+					q.OnPage = func(c context.Context) (func(), error) { return s.Limiter.Acquire(c, site.GoogleAccount) }
 				}
-				rows, err := s.GSC.Query(reqCtx, token, site.GSCProperty, google.Query{Start: start, End: end, Dimensions: sl.Dimensions})
-				if release != nil {
-					release()
-				}
+				rows, err := s.GSC.Query(reqCtx, token, site.GSCProperty, q)
 				if err != nil && !errors.Is(err, google.ErrTruncated) {
 					fail(fmt.Errorf("search console %s %s..%s: %w", sl.Name, start, end, err))
 					return
@@ -296,15 +358,27 @@ func (s *Syncer) runSpans(ctx context.Context, site store.Site, token string, sl
 					mu.Unlock()
 					continue
 				}
-				if s.Progress != nil {
-					s.Progress(Progress{SiteID: site.ID, Slice: sl.Name, Day: start, Done: done, Total: len(todo)})
-				}
+				doneSnapshot, totalSnapshot := done, len(todo)
 				mu.Unlock()
+				if s.Progress != nil {
+					s.Progress(Progress{SiteID: site.ID, Slice: sl.Name, Day: start, Done: doneSnapshot, Total: totalSnapshot})
+				}
 			}
 		}()
 	}
 	wg.Wait()
-	return firstErr
+	if firstErr != nil {
+		return firstErr
+	}
+	// The caller's ctx may already have been done before this call even
+	// started (for example, SyncSite's own ctx was canceled between
+	// slices): nothing ran, but that must not look like a clean, empty
+	// success — the caller needs to know to stop, not move on to the next
+	// slice.
+	if sent == 0 && ctx.Err() != nil {
+		return ctx.Err()
+	}
+	return nil
 }
 
 func toRows(sl Slice, rows []google.Row) []store.GSCRow {

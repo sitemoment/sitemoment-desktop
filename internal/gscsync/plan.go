@@ -56,6 +56,15 @@ type QPPlan struct {
 // requested one at a time. Days the date ledger does not cover yet (for
 // example because an earlier Plan run for "date" itself was capped) are
 // always requested alone, never merged.
+//
+// A day within the newest tail days is never permanently recorded empty:
+// Search Console finalizes data for the most recent days late, so a zero
+// seen there might just not be final yet. Such a day is still requested
+// (not skipped) as long as it is due — either because it was never fetched,
+// or because its own fetch is older than refreshBefore — exactly like a
+// non-empty day, so it keeps getting re-checked every run until either real
+// data shows up or it ages out of the tail (at which point a zero becomes
+// final and is skipped from then on).
 func PlanQueryPage(done, dateDone map[string]int64, dateImpressions map[string]float64, from, through time.Time, tail int, refreshBefore int64, maxDays int, maxImpressions float64) []QPPlan {
 	var out []QPPlan
 	// open tracks the kind of the span currently being extended backward
@@ -66,13 +75,15 @@ func PlanQueryPage(done, dateDone map[string]int64, dateImpressions map[string]f
 	for d := through; !d.Before(from); d = d.AddDate(0, 0, -1) {
 		key := d.Format("2006-01-02")
 		at, fetched := done[key]
-		need := !fetched || (!d.Before(tailStart) && at < refreshBefore)
+		withinTail := !d.Before(tailStart)
+		need := !fetched || (withinTail && at < refreshBefore)
 		if !need {
 			open = ""
 			continue
 		}
 		_, dateFetched := dateDone[key]
 		imp, hasImpressions := dateImpressions[key]
+		isEmpty := !hasImpressions || imp <= 0
 
 		switch {
 		case !dateFetched:
@@ -81,7 +92,9 @@ func PlanQueryPage(done, dateDone map[string]int64, dateImpressions map[string]f
 			out = append(out, QPPlan{Span: Span{From: d, Through: d}})
 			open = ""
 
-		case !hasImpressions || imp <= 0:
+		case isEmpty && !withinTail:
+			// Outside the tail: a zero is as final as it gets. Skip it,
+			// recording it fetched with 0 rows, no request.
 			if open == "skip" {
 				out[len(out)-1].From = d
 				continue
@@ -90,6 +103,8 @@ func PlanQueryPage(done, dateDone map[string]int64, dateImpressions map[string]f
 			open = "skip"
 
 		default:
+			// Either real data, or a zero still within the tail (not
+			// final yet, so fetch and recheck rather than skip).
 			if open == "fetch" && out[len(out)-1].days() < maxDays && openImpressions+imp <= maxImpressions {
 				out[len(out)-1].From = d
 				openImpressions += imp

@@ -82,7 +82,9 @@ func TestPlanQueryPageSkipsEmptyDays(t *testing.T) {
 	for _, d := range []string{"2026-01-05", "2026-01-15", "2026-01-25"} {
 		imp[d] = 10
 	}
-	plan := PlanQueryPage(map[string]int64{}, dateDone, impMap(imp), from, through, 3, 50, 7, 5000)
+	// tail 0: isolate the skip/merge behavior from the tail re-check
+	// behavior, which has its own dedicated test below.
+	plan := PlanQueryPage(map[string]int64{}, dateDone, impMap(imp), from, through, 0, 50, 7, 5000)
 
 	var fetches, skips int
 	for _, p := range plan {
@@ -162,6 +164,35 @@ func TestPlanQueryPageDoesNotMergeAcrossBigImpressions(t *testing.T) {
 		if f.days() != 1 {
 			t.Fatalf("span %+v covers %d days, want 1", f, f.days())
 		}
+	}
+}
+
+// TestPlanQueryPageDoesNotSkipWithinTail: a day within the tail window that
+// currently shows zero impressions is fetched (not permanently skipped),
+// because Search Console finalizes data for recent days late; once it ages
+// out of the tail, a still-zero day is finally skipped.
+func TestPlanQueryPageDoesNotSkipWithinTail(t *testing.T) {
+	from, through := day("2026-01-01"), day("2026-01-10") // 10 days
+	dateDone := doneAll(100, "2026-01-01", "2026-01-02", "2026-01-03", "2026-01-04", "2026-01-05",
+		"2026-01-06", "2026-01-07", "2026-01-08", "2026-01-09", "2026-01-10")
+	// No day has recorded impressions yet (impMap(nil) == empty map): the
+	// newest 5 days are within the tail and must still be fetched; the
+	// older 5 are outside it and are final zeros, skipped.
+	plan := PlanQueryPage(map[string]int64{}, dateDone, impMap(nil), from, through, 5, 50, 7, 5000)
+
+	var fetchDays, skipDays int
+	for _, p := range plan {
+		if p.Skip {
+			skipDays += p.days()
+		} else {
+			fetchDays += p.days()
+		}
+	}
+	if fetchDays != 5 {
+		t.Fatalf("fetch days = %d, want 5 (the tail, still re-checked)", fetchDays)
+	}
+	if skipDays != 5 {
+		t.Fatalf("skip days = %d, want 5 (outside the tail, a zero is final)", skipDays)
 	}
 }
 
