@@ -68,7 +68,7 @@ export function BindGSC({ site, onBound, children }: { site: Site; onBound: () =
       <section className="panel">
         <h2>连接 Search Console</h2>
         <p>选择能读取 <b>{site.host}</b> 的 Google 账号和资源。数据只保存在这台电脑上，Google 授权放在系统钥匙串里。</p>
-        {!configured && <p className="error">这个版本没有配置 Google OAuth client ID。开发时请设置环境变量 SITEMOMENT_GOOGLE_CLIENT_ID 和 SITEMOMENT_GOOGLE_CLIENT_SECRET。</p>}
+        {!configured && <p className="error">这个版本没有配置 Google OAuth client ID。开发时在项目根目录的 .env.local 里写上 SITEMOMENT_GOOGLE_CLIENT_ID 和 SITEMOMENT_GOOGLE_CLIENT_SECRET（Google Cloud 里「桌面应用」类型的 OAuth 客户端），然后重新运行 make dev。</p>}
         <div className="row">
           {conns.length > 0 && (
             <select value={account} onChange={(e) => setAccount(e.target.value)}>
