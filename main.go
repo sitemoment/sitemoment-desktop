@@ -120,7 +120,8 @@ func main() {
 	proxy := netproxy.New()
 	httpc := proxy.Client(60 * time.Second)
 	streamHTTP := proxy.Client(0) // model answers stream for minutes; each call has its own context deadline
-	cl := &cloud.Client{Base: env("SITEMOMENT_API", cloudBase), HTTP: httpc, Secrets: secrets}
+	apiBase := env("SITEMOMENT_API", cloudBase)
+	cl := &cloud.Client{Base: apiBase, HTTP: httpc, Secrets: secrets}
 	oauth := &google.OAuth{
 		// Set only from env/ldflags; empty means "ask the backend" (owner
 		// decision 2026-11-11: central configuration in the admin console,
@@ -239,6 +240,7 @@ func main() {
 			application.NewService(&app.TaskService{Ops: ops}),
 			application.NewService(&app.ReportService{Ops: ops, Save: save}),
 			application.NewService(&app.NoticeService{Store: st}),
+			application.NewService(&app.NetworkService{Proxy: proxy, Probes: []string{"https://www.google.com/generate_204", apiBase + "/healthz"}}),
 		},
 		// The middleware serves collector windows their boot page and keeps
 		// them away from everything else the asset server offers.
