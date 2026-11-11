@@ -52,7 +52,12 @@ main { flex: 1; min-width: 0; display: flex; flex-direction: column; background:
 .seg { display: flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
 .seg button { border: 0; background: none; padding: 3px 9px; color: var(--text-3); font-family: var(--mono); font-size: 11px; }
 .seg button.on { background: var(--surface-2); color: var(--text-1); }
-.content { flex: 1; overflow: auto; padding: 14px; display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 12px; align-content: start; }
+/* grid-auto-rows: max-content is required, not cosmetic: .content scrolls
+   (overflow: auto), and a CSS grid container with non-visible overflow gives
+   its "auto"-sized rows an automatic minimum size of 0, which let a tall
+   item like .kpis get squashed down to its smallest content (just the
+   label line) instead of sizing to its full content height. */
+.content { flex: 1; overflow: auto; padding: 14px; display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); grid-auto-rows: max-content; gap: 12px; align-content: start; }
 .panel { background: var(--surface-1); border: 1px solid var(--line); border-radius: 8px; padding: 12px; grid-column: span 12; }
 .panel h2 { margin: 0 0 8px; font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--text-3); display: flex; justify-content: space-between; font-weight: 600; }
 .panel p { color: var(--text-2); }
