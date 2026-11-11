@@ -150,7 +150,7 @@ func TestCellNeutralizesMarkdownAndHTMLMetacharacters(t *testing.T) {
 
 func TestClicksChartGuardsDayLabels(t *testing.T) {
 	days := []store.DayPoint{
-		{Day: "x", Clicks: 1, Impressions: 2},                 // shorter than len("YYYY-MM-DD"): must not panic
+		{Day: "x", Clicks: 1, Impressions: 2},                  // shorter than len("YYYY-MM-DD"): must not panic
 		{Day: "2026-11-08<script>", Clicks: 3, Impressions: 4}, // must be escaped, not injected raw into the SVG
 	}
 	got := clicksChart(days, "2026-11-01")
