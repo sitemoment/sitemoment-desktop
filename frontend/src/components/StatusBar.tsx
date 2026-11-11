@@ -1,8 +1,8 @@
-import { fmtBytes, fmtTime } from "../format";
-import type { Info, SyncProgress, SyncStatus } from "../types";
+import { fmtBytes, fmtCredits, fmtTime } from "../format";
+import type { Account, Info, SyncProgress, SyncStatus } from "../types";
 
-export function StatusBar({ status, progress, info, siteId }: {
-  status?: SyncStatus; progress: SyncProgress | null; info: Info | null; siteId?: number;
+export function StatusBar({ status, progress, info, siteId, account }: {
+  status?: SyncStatus; progress: SyncProgress | null; info: Info | null; siteId?: number; account?: Account | null;
 }) {
   let left = "未同步";
   const ownProgress = progress && progress.siteId === siteId ? progress : null;
@@ -18,6 +18,11 @@ export function StatusBar({ status, progress, info, siteId }: {
       <span>{left}</span>
       <span className="right">
         {info && <span>SQLite {fmtBytes(info.dbBytes)}</span>}
+        {account?.signedIn && account.creditsLimit > 0 && (
+          <span title={`${account.creditsMonth} 的 SiteMoment 积分（托管模型和付费数据共用）`}>
+            额度 {fmtCredits(account.creditsUsed)} / {fmtCredits(account.creditsLimit)}
+          </span>
+        )}
         {info && <span>v{info.version}</span>}
       </span>
     </div>

@@ -109,7 +109,7 @@ export default function App() {
           )}
         </main>
       </div>
-      <StatusBar status={site ? statuses[site.id] : undefined} progress={site ? progress[site.id] ?? null : null} info={info} siteId={site?.id} />
+      <StatusBar status={site ? statuses[site.id] : undefined} progress={site ? progress[site.id] ?? null : null} info={info} siteId={site?.id} account={account} />
       {adding && (
         <AddSite onCancel={() => setAdding(false)} onDone={async (s) => { setAdding(false); await reloadSites(); setSiteId(s.id); setPage("overview"); }} />
       )}

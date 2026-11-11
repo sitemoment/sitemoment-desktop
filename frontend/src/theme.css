@@ -57,7 +57,7 @@ main { flex: 1; min-width: 0; display: flex; flex-direction: column; background:
 .panel h2 { margin: 0 0 8px; font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--text-3); display: flex; justify-content: space-between; font-weight: 600; }
 .panel p { color: var(--text-2); }
 
-.kpis { grid-column: span 12; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.kpis { grid-column: span 12; display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
 .kpi { background: var(--surface-1); padding: 10px 12px; }
 .kpi-label { font-size: 11px; color: var(--text-3); display: flex; justify-content: space-between; }
 .kpi-value { font-family: var(--mono); font-size: 20px; }
