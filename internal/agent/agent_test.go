@@ -385,6 +385,25 @@ func TestExtraToolCallsBeyondTheStepLimitAreAllAnswered(t *testing.T) {
 	}
 }
 
+func TestModelCallsHaveATimeout(t *testing.T) {
+	var gotDeadline bool
+	var dur time.Duration
+	r := newRig(t, ModeConfirm, func(ctx context.Context, _ llm.Request) (*llm.Reply, error) {
+		if dl, ok := ctx.Deadline(); ok {
+			gotDeadline = true
+			dur = time.Until(dl)
+		}
+		return &llm.Reply{Content: "ok"}, nil
+	})
+	r.send(t, "x")
+	if !gotDeadline {
+		t.Fatal("the model call had no deadline")
+	}
+	if dur <= 0 || dur > callTimeout {
+		t.Fatalf("deadline %v from now, want (0, %v]", dur, callTimeout)
+	}
+}
+
 func TestStepLimitForcesAnAnswer(t *testing.T) {
 	loop := call("", tc("c1", "load_playbook", `{"topic":"keywords"}`))
 	r := newRig(t, ModeConfirm, loop, loop, say("最终回答"))

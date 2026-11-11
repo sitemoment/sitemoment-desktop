@@ -267,9 +267,7 @@ func (a *Agent) loop(ctx context.Context, t *turn, start int) {
 			a.fail(ctx, t, err)
 			return
 		}
-		reply, err := t.model.Chat(ctx, llm.Request{Messages: msgs, Tools: toolDefs(t.tools)}, func(s string) {
-			a.emit(t, "text", map[string]any{"delta": s})
-		})
+		reply, err := a.chat(ctx, t, llm.Request{Messages: msgs, Tools: toolDefs(t.tools)})
 		if err != nil {
 			a.fail(ctx, t, err)
 			return
@@ -313,15 +311,23 @@ func (a *Agent) loop(ctx context.Context, t *turn, start int) {
 		return
 	}
 	msgs = append(msgs, llm.Message{Role: "user", Content: "（系统：本轮工具调用次数已达上限。请基于已有数据直接作答，缺的数据写进「下一轮要补的数据」。）"})
-	reply, err := t.model.Chat(ctx, llm.Request{Messages: msgs, Tools: toolDefs(t.tools), NoToolUse: true}, func(s string) {
-		a.emit(t, "text", map[string]any{"delta": s})
-	})
+	reply, err := a.chat(ctx, t, llm.Request{Messages: msgs, Tools: toolDefs(t.tools), NoToolUse: true})
 	if err != nil {
 		a.fail(ctx, t, err)
 		return
 	}
 	reply.ToolCalls = nil
 	a.answer(ctx, t, reply)
+}
+
+// chat calls the model with the plan's per-call timeout (separate from the
+// whole-turn timeout, so one slow call can't eat the rest of the turn's budget).
+func (a *Agent) chat(ctx context.Context, t *turn, req llm.Request) (*llm.Reply, error) {
+	cctx, cancel := context.WithTimeout(ctx, callTimeout)
+	defer cancel()
+	return t.model.Chat(cctx, req, func(s string) {
+		a.emit(t, "text", map[string]any{"delta": s})
+	})
 }
 
 // step runs one round of tool calls. Uncached paid calls that need the
