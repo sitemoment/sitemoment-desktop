@@ -1,9 +1,11 @@
-import { Events, type CancellablePromise } from "@wailsio/runtime";
+import { Browser, Events, type CancellablePromise } from "@wailsio/runtime";
 import {
-  AccountService, BingService, GoogleService, InfoService, KeywordService, OverviewService, SiteService, SyncService,
+  AccountService, AgentService, BingService, CollectorService, GoogleService, InfoService, KeywordService, ModelService, OverviewService,
+  SiteService, SyncService,
 } from "../bindings/github.com/sitemoment/sitemoment-desktop/internal/app";
 import type {
-  Account, BingSite, CloudQuote, Connection, FetchResult, GAProperty, Info, KeywordKind, KeywordList, Overview, Property, Site, SyncStatus,
+  Account, BingSite, CloudQuote, CollectorStats, CollectorView, Connection, FetchResult, GAProperty, Info, KeywordKind, KeywordList,
+  ModelSettings, Overview, Property, RunView, SessionView, Site, SpendMode, SyncStatus, Transcript,
 } from "./types";
 
 // The generated bindings (typed via `wails3 generate bindings -ts -i`) return
@@ -57,7 +59,37 @@ export const api = {
   quoteCloud: (siteId: number, ids: number[]) => call<CloudQuote>(KeywordService.QuoteCloud(siteId, ids)),
   fetchCloud: (siteId: number, ids: number[]) => call<FetchResult>(KeywordService.FetchCloud(siteId, ids)),
   info: () => call<Info>(InfoService.Get()),
+  sessions: (siteId: number) => call<SessionView[]>(AgentService.Sessions(siteId)),
+  createSession: (siteId: number) => call<SessionView>(AgentService.Create(siteId)),
+  deleteSession: (id: number) => call<void>(AgentService.Delete(id)),
+  transcript: (id: number) => call<Transcript>(AgentService.Transcript(id)),
+  send: (id: number, text: string) => call<void>(AgentService.Send(id, text)),
+  stop: (id: number) => call<void>(AgentService.Stop(id)),
+  confirm: (id: number, approve: boolean) => call<void>(AgentService.Confirm(id, approve)),
+  setMode: (id: number, mode: SpendMode) => call<SessionView>(AgentService.SetMode(id, mode)),
+  modelLabel: () => call<string>(AgentService.ModelLabel()),
+  modelSettings: () => call<ModelSettings>(ModelService.Settings()),
+  saveModelSettings: (m: ModelSettings) => call<ModelSettings>(ModelService.Save(m)),
+  setModelKey: (provider: "openai" | "anthropic", key: string) => call<ModelSettings>(ModelService.SetKey(provider, key)),
+  hostedModels: () => call<string[]>(ModelService.HostedModels()),
+  testModel: () => call<string>(ModelService.Test()),
+  collectors: () => call<CollectorView[]>(CollectorService.List()),
+  rescanCollectors: () => call<CollectorView[]>(CollectorService.Rescan()),
+  // version, hosts and sha must be exactly what the Collectors page showed
+  // for id (Catalog.Approve rejects anything else).
+  approveCollector: (id: string, version: string, hosts: string[], sha: string) =>
+    call<CollectorView[]>(CollectorService.Approve(id, version, hosts, sha)),
+  collectorDir: () => call<string>(CollectorService.Dir()),
+  collectorRuns: (limit: number) => call<RunView[]>(CollectorService.Runs(limit)),
+  needsHuman: () => call<RunView[]>(CollectorService.NeedsHuman()),
+  revealRun: (runId: number) => call<void>(CollectorService.Reveal(runId)),
+  collectorStats: () => call<CollectorStats>(CollectorService.Stats()),
 };
+
+/** Opens an http(s) link in the system browser; anything else is ignored. */
+export function openURL(href: string) {
+  if (/^https?:\/\//i.test(href)) Browser.OpenURL(href).catch(() => {});
+}
 
 /** Subscribes to a Go event (application Event.Emit); returns the unsubscribe function. */
 export function onEvent<T>(name: string, fn: (data: T) => void): () => void {
@@ -80,11 +112,15 @@ export const errText = (e: unknown) => {
   if (msg.includes("bing: this key cannot read that site")) return "这个 Bing key 读不到该站点";
   if (msg.includes("cloud: not signed in")) return "请先登录 SiteMoment";
   if (msg.includes("store: a keyword is 1 to 200 characters")) return "关键词不能为空，最长 200 个字符";
+  if (msg.includes("llm:") && msg.includes("credits_exhausted")) return "本月 SiteMoment 额度已用完，可以在设置 → AI 模型里改用自己的 key";
   if (msg.includes("credits_exhausted")) return "本月额度已用完";
   if (msg.includes("request_too_large")) return "这次请求太大，请减少关键词数量";
   if (msg.includes("data_budget")) return "数据服务今天的总额度已用完，请明天再试";
   if (msg.includes("rate_limited")) return "今天的数据请求次数已用完，请明天再试";
   if (msg.includes("too_many_requests")) return "请等上一个取数完成";
+  // The model's own messages are already Chinese; just drop the "llm: " prefix.
+  if (msg.includes("模型回复太长，已中止")) return "模型回复太长，已中止";
+  if (msg.includes("模型回复中断")) return "模型回复中断";
   if (isNetworkError(msg)) return "网络连接失败，请检查网络";
   return msg;
 };
