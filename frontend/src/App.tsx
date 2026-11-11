@@ -5,12 +5,13 @@ import { AgentPanel } from "./agent/AgentPanel";
 import { AddSite } from "./components/AddSite";
 import { SitesPanel } from "./components/SitesPanel";
 import { StatusBar } from "./components/StatusBar";
+import { CollectorsPage } from "./pages/Collectors";
 import { KeywordsPage } from "./pages/Keywords";
 import { OverviewPage } from "./pages/Overview";
 import { SettingsPage } from "./pages/Settings";
-import type { Account, Info, Site, SyncProgress, SyncStatus } from "./types";
+import type { Account, CollectorStats, Info, Site, SyncProgress, SyncStatus } from "./types";
 
-type Page = "overview" | "keywords" | "settings";
+type Page = "overview" | "keywords" | "collectors" | "settings";
 
 export default function App() {
   const [account, setAccount] = useState<Account | null>(null);
@@ -20,6 +21,7 @@ export default function App() {
   const [statuses, setStatuses] = useState<Record<number, SyncStatus>>({});
   const [progress, setProgress] = useState<Record<number, SyncProgress>>({});
   const [info, setInfo] = useState<Info | null>(null);
+  const [collect, setCollect] = useState<CollectorStats | null>(null);
   const [adding, setAdding] = useState(false);
   const [error, setError] = useState("");
   const [loggingIn, setLoggingIn] = useState(false);
@@ -61,9 +63,12 @@ export default function App() {
     const offProgress = onEvent<SyncProgress>("sync:progress", (p) => {
       setProgress((m) => ({ ...m, [p.siteId]: p }));
     });
+    api.collectorStats().then(setCollect).catch(() => {});
+    const offCollect = onEvent<CollectorStats>("collect:stats", setCollect);
     return () => {
       offStatus();
       offProgress();
+      offCollect();
     };
   }, [reloadSites]);
 
@@ -104,18 +109,22 @@ export default function App() {
         <nav className="rail">
           <button className={page === "overview" ? "on" : ""} title="概览" aria-label="概览" onClick={() => setPage("overview")}>◧</button>
           <button className={page === "keywords" ? "on" : ""} title="关键词" aria-label="关键词" onClick={() => setPage("keywords")}>⌕</button>
+          <button className={page === "collectors" ? "on" : ""} title="采集器" aria-label="采集器" onClick={() => setPage("collectors")}>⧉</button>
           <button className={"bottom" + (page === "settings" ? " on" : "")} title="设置" aria-label="设置" onClick={() => setPage("settings")}>⚙</button>
         </nav>
         <SitesPanel sites={sites} selected={siteId} statuses={statuses} account={account} loggingIn={loggingIn}
-          onSelect={(id) => { setSiteId(id); setPage((p) => (p === "settings" ? "overview" : p)); }} onAdd={() => setAdding(true)} onLogin={login} />
+          onSelect={(id) => { setSiteId(id); setPage((p) => (p === "settings" || p === "collectors" ? "overview" : p)); }} onAdd={() => setAdding(true)} onLogin={login} />
         <main>
           <div className="tabs">
             <span className={page === "overview" ? "on" : ""}>{site ? `概览 · ${site.host}` : "概览"}</span>
             <span className={page === "keywords" ? "on" : ""}>关键词</span>
+            <span className={page === "collectors" ? "on" : ""}>采集器</span>
             <span className={page === "settings" ? "on" : ""}>设置</span>
           </div>
           {error && <div className="toolbar error">{error}</div>}
-          {page === "settings" ? (
+          {page === "collectors" ? (
+            <CollectorsPage />
+          ) : page === "settings" ? (
             <SettingsPage account={account} info={info} sites={sites} onAccount={setAccount} onLogin={login} onSitesChanged={reloadSites}
               onModelChanged={() => setModelRev((n) => n + 1)} />
           ) : !site ? (
@@ -128,7 +137,7 @@ export default function App() {
         </main>
         {agentOpen && <AgentPanel site={site} account={account} modelRev={modelRev} onOpenSettings={() => setPage("settings")} onCreditsUsed={refreshAccount} />}
       </div>
-      <StatusBar status={site ? statuses[site.id] : undefined} progress={site ? progress[site.id] ?? null : null} info={info} siteId={site?.id} account={account} />
+      <StatusBar status={site ? statuses[site.id] : undefined} progress={site ? progress[site.id] ?? null : null} info={info} siteId={site?.id} account={account} collect={collect} />
       {adding && (
         <AddSite onCancel={() => setAdding(false)} onDone={async (s) => { setAdding(false); await reloadSites(); setSiteId(s.id); setPage("overview"); }} />
       )}
