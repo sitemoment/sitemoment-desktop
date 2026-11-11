@@ -22,3 +22,15 @@ func (s *Store) SetWebCache(ctx context.Context, key, value string, fetchedAt, e
 		"ON CONFLICT(key) DO UPDATE SET value = excluded.value, fetched_at = excluded.fetched_at, expires_at = excluded.expires_at", key, value, fetchedAt, expiresAt)
 	return err
 }
+
+// PruneWebCache deletes entries that expired at or before now and returns
+// how many rows were removed. Meant to run once at startup so the cache
+// doesn't grow forever with entries nothing will ever read again.
+func (s *Store) PruneWebCache(ctx context.Context, now int64) (int, error) {
+	res, err := s.db.ExecContext(ctx, "DELETE FROM web_cache WHERE expires_at <= ?", now)
+	if err != nil {
+		return 0, err
+	}
+	n, err := res.RowsAffected()
+	return int(n), err
+}

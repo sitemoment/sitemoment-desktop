@@ -123,6 +123,23 @@ func TestAgentMessagesAndToolCalls(t *testing.T) {
 	}
 }
 
+func TestPruneWebCache(t *testing.T) {
+	st := open(t)
+	ok(t, st.SetWebCache(ctx, "expired", "v", 1, 10))
+	ok(t, st.SetWebCache(ctx, "fresh", "v", 1, 100))
+	n, err := st.PruneWebCache(ctx, 50)
+	ok(t, err)
+	if n != 1 {
+		t.Fatalf("pruned %d rows, want 1", n)
+	}
+	if _, _, hit, _ := st.WebCache(ctx, "expired", 5); hit {
+		t.Fatal("expired entry survived the prune (checked against an earlier now)")
+	}
+	if _, _, hit, err := st.WebCache(ctx, "fresh", 50); err != nil || !hit {
+		t.Fatalf("fresh entry removed: hit=%v err=%v", hit, err)
+	}
+}
+
 func TestWebCache(t *testing.T) {
 	st := open(t)
 	if _, _, hit, err := st.WebCache(ctx, "k", 10); err != nil || hit {

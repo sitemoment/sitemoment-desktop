@@ -76,11 +76,17 @@ type Deps struct {
 	CrawlPages int
 	Now        func() time.Time
 
-	mu        sync.Mutex
-	crawls    map[string]*rank.CrawlResult
-	catalog   []cloud.Tool
-	catalogAt time.Time
+	mu sync.Mutex
+	// crawls caches site_crawl results, bounded to maxCrawls hosts (LRU) so
+	// a long session can't grow it without limit.
+	crawls     map[string]*rank.CrawlResult
+	crawlOrder []string // least recently used first
+	catalog    []cloud.Tool
+	catalogAt  time.Time
 }
+
+// maxCrawls caps how many hosts' crawl results Deps keeps in memory.
+const maxCrawls = 20
 
 // Env is what one tool call sees: the shared clients and the session's site.
 type Env struct {
@@ -96,6 +102,18 @@ func (d *Deps) now() time.Time {
 	return time.Now()
 }
 
+// touchCrawlLocked moves host to the most-recently-used end of crawlOrder
+// (appending it if it was not already there). Callers must hold d.mu.
+func (d *Deps) touchCrawlLocked(host string) {
+	for i, h := range d.crawlOrder {
+		if h == host {
+			d.crawlOrder = append(d.crawlOrder[:i], d.crawlOrder[i+1:]...)
+			break
+		}
+	}
+	d.crawlOrder = append(d.crawlOrder, host)
+}
+
 func (d *Deps) rememberCrawl(r *rank.CrawlResult) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -103,12 +121,23 @@ func (d *Deps) rememberCrawl(r *rank.CrawlResult) {
 		d.crawls = map[string]*rank.CrawlResult{}
 	}
 	d.crawls[r.Host] = r
+	d.touchCrawlLocked(r.Host)
+	for len(d.crawlOrder) > maxCrawls {
+		oldest := d.crawlOrder[0]
+		d.crawlOrder = d.crawlOrder[1:]
+		delete(d.crawls, oldest)
+	}
 }
 
 func (d *Deps) crawlOf(host string) *rank.CrawlResult {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	return d.crawls[strings.TrimPrefix(strings.ToLower(host), "www.")]
+	host = strings.TrimPrefix(strings.ToLower(host), "www.")
+	r := d.crawls[host]
+	if r != nil {
+		d.touchCrawlLocked(host)
+	}
+	return r
 }
 
 func schema(s string) json.RawMessage { return json.RawMessage(s) }

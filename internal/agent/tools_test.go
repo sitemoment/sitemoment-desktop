@@ -170,6 +170,25 @@ func TestFetchPageAndPlaybookTools(t *testing.T) {
 	}
 }
 
+func TestRememberCrawlIsBoundedToAnLRUOfTwenty(t *testing.T) {
+	d := &Deps{}
+	for i := 0; i < 25; i++ {
+		d.rememberCrawl(&rank.CrawlResult{Host: fmt.Sprintf("site%d.com", i)})
+	}
+	d.mu.Lock()
+	n := len(d.crawls)
+	d.mu.Unlock()
+	if n > 20 {
+		t.Fatalf("crawls has %d entries, want <= 20", n)
+	}
+	if d.crawlOf("site24.com") == nil {
+		t.Fatal("the most recently remembered crawl was evicted")
+	}
+	if d.crawlOf("site0.com") != nil {
+		t.Fatal("the oldest crawl was not evicted")
+	}
+}
+
 func TestCollectorTools(t *testing.T) {
 	col := &fakeCollectors{}
 	env := siteEnv(t, &Deps{Collectors: col})
