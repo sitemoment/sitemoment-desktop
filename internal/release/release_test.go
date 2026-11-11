@@ -14,7 +14,12 @@ func TestNumeric(t *testing.T) {
 			t.Errorf("Numeric(%q) = %q, %v", in, got, err)
 		}
 	}
-	for _, bad := range []string{"", "dev", "v1.2.3", "1.2", "1.2.3.4", "01.2.3", "1.2.3-", "1.2.3+build"} {
+	for _, bad := range []string{"", "dev", "v1.2.3", "1.2", "1.2.3.4", "01.2.3", "1.2.3-", "1.2.3+build",
+		// The hand-written regexp alone accepts these (its pre-release
+		// character class doesn't validate per-identifier rules); semver.IsValid
+		// catches them: empty identifier, leading-zero numeric identifiers,
+		// and a trailing empty identifier.
+		"1.2.3-rc..1", "1.2.3-01", "1.2.3-rc.01", "1.2.3-rc.1."} {
 		if _, err := Numeric(bad); err == nil {
 			t.Errorf("Numeric(%q) accepted", bad)
 		}

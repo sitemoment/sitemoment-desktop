@@ -9,6 +9,8 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+
+	"golang.org/x/mod/semver"
 )
 
 var versionRE = regexp.MustCompile(`^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z][0-9A-Za-z.-]*)?$`)
@@ -16,9 +18,15 @@ var versionRE = regexp.MustCompile(`^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][
 // Numeric checks a release version ("1.2.3" or "1.2.3-rc.1", the git tag
 // without its "v") and returns the numeric part ("1.2.3"): the only form the
 // macOS bundle version and the Windows version resource accept.
+//
+// versionRE alone is not enough: its pre-release character class accepts
+// strings a dotted-identifier grammar should not (an empty identifier like
+// "rc..1", a leading-zero numeric identifier like "01" or "rc.01", a
+// trailing empty identifier like "rc.1."). semver.IsValid enforces the full
+// per-identifier grammar on top of the shape versionRE already checked.
 func Numeric(version string) (string, error) {
 	m := versionRE.FindStringSubmatch(version)
-	if m == nil {
+	if m == nil || !semver.IsValid("v"+version) {
 		return "", fmt.Errorf("release: %q is not a version like 1.2.3 or 1.2.3-rc.1 (no leading v)", version)
 	}
 	return m[1] + "." + m[2] + "." + m[3], nil
