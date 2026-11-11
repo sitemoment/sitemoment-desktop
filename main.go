@@ -29,6 +29,7 @@ import (
 	"github.com/sitemoment/sitemoment-desktop/internal/secret"
 	"github.com/sitemoment/sitemoment-desktop/internal/store"
 	"github.com/sitemoment/sitemoment-desktop/internal/tasks"
+	"github.com/sitemoment/sitemoment-desktop/internal/updates"
 	"github.com/sitemoment/sitemoment-desktop/internal/webdata"
 	"github.com/sitemoment/sitemoment-desktop/internal/webview"
 	"github.com/wailsapp/wails/v3/pkg/application"
@@ -38,12 +39,16 @@ import (
 //go:embed all:frontend/dist
 var assets embed.FS
 
-// Set at release build time with -ldflags "-X main.version=... -X main.googleClientID=...".
+// Set at release build time with -ldflags "-X main.version=... -X main.googleClientID=..."
+// (the RELEASE_LDFLAGS of Taskfile.yml, filled by the release workflow).
 var (
 	version            = "dev"
 	cloudBase          = "https://sitemoment.com/api"
 	googleClientID     = ""
 	googleClientSecret = "" // a desktop client's secret is not confidential (Google's own guidance)
+	// updatePublicKey is the base64 Ed25519 key update assets must be signed
+	// with; empty accepts releases checked by SHA-256 alone (internal/updates).
+	updatePublicKey = ""
 )
 
 // runCachePrune is how far back finished collector runs are kept: the
@@ -126,11 +131,31 @@ func main() {
 	// Events go to the main window only: Event.Emit runs JS in every window,
 	// and a collector window shows a third-party page that could read them.
 	var mainWin atomic.Pointer[application.WebviewWindow]
-	emit := func(name string, data any) {
+	dispatch := func(name string, data any) {
 		if w := mainWin.Load(); w != nil {
 			w.DispatchWailsEvent(&application.CustomEvent{Name: name, Data: data})
 		}
 	}
+	// OS notifications while the main window is in the background, for the
+	// events app.NoteFor picks (they have their own place in the app), and
+	// in-app toasts plus OS notifications for new versions.
+	native := newNativeNotes()
+	notifier := &app.Notifier{Settings: st, Emit: dispatch, Native: native,
+		Focused: func() bool { w := mainWin.Load(); return w != nil && w.IsFocused() }}
+	emit := func(name string, data any) {
+		dispatch(name, data)
+		if note, ok := app.NoteFor(name, data); ok {
+			notifier.OS(ctx, note)
+		}
+	}
+	updateSvc := updates.New(ctx, updates.Options{
+		Version: version, PublicKey: updatePublicKey, Settings: st, Emit: dispatch,
+		OnFound: func(v string) {
+			notifier.Notify(ctx, app.Note{Title: "SiteMoment 有新版本", Body: "v" + v + " 已发布，在设置 → 软件更新里安装。", Kind: "update"})
+		},
+		Quit:     func() { wapp.Quit() },
+		Provider: updates.ProviderConfig{Repo: env("SITEMOMENT_UPDATE_REPO", updates.Repo)},
+	})
 	progress := func(p gscsync.Progress) { emit("sync:progress", p) }
 	syncSvc := &app.SyncService{
 		Sources: []app.Source{
@@ -193,6 +218,9 @@ func main() {
 			application.NewService(&app.ModelService{Models: models}),
 			application.NewService(&app.AgentService{Agent: ag, Store: st}),
 			application.NewService(&app.CollectorService{Catalog: catalog, Runner: runner, Browser: browser}),
+			application.NewService(updateSvc),
+			application.NewService(&app.NotifyService{Notifier: notifier}),
+			application.NewService(native),
 			application.NewService(&app.HealthService{Ops: ops}),
 			application.NewService(&app.TaskService{Ops: ops}),
 			application.NewService(&app.ReportService{Ops: ops, Save: save}),
@@ -216,6 +244,7 @@ func main() {
 	// window closes.
 	win.OnWindowEvent(events.Common.WindowClosing, func(*application.WindowEvent) { wapp.Quit() })
 	go app.RunSyncLoop(ctx, syncSvc, 6*time.Hour)
+	go updates.Run(ctx, updateSvc, 30*time.Second, time.Hour)
 	// Daily health checks at 08:00 (missed ones as soon as the app is open),
 	// task checks after them and a weekly report per site.
 	go app.RunOpsLoop(ctx, ops, 10*time.Minute)
