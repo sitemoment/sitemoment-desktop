@@ -121,6 +121,28 @@ func TestSuggestToolCaches(t *testing.T) {
 	}
 }
 
+func TestBingQueryWidensTheComparisonWeekWindowToo(t *testing.T) {
+	env := siteEnv(t, &Deps{})
+	ok(t, env.Store.ReplaceBingStats(ctx, env.Site.ID, "query", []store.BingStat{
+		// This week starts a few days before the explicit comparison
+		// window (2026-10-28..2026-11-03): it must still be included, the
+		// same way the current window's "-6 days" already includes the
+		// week straddling its own start.
+		{Week: "2026-10-25", Key: "thumbnail maker", Clicks: 4, Impressions: 40, Position: 6},
+		{Week: "2026-11-01", Key: "thumbnail maker", Clicks: 2, Impressions: 20, Position: 5},
+	}, 1))
+	res, err := runBingQuery(ctx, env, map[string]any{"dimension": "query", "from": "2026-11-04", "to": "2026-11-10", "compare": true})
+	ok(t, err)
+	var out struct {
+		PrevClicks map[string]float64 `json:"prevClicks"`
+	}
+	ok(t, json.Unmarshal([]byte(res.Text), &out))
+	// BingQuery sums across weeks for the same key: 4 (10-25) + 2 (11-01) = 6.
+	if out.PrevClicks["thumbnail maker"] != 6 {
+		t.Fatalf("prevClicks %v, want the week straddling the comparison window's start included (6)", out.PrevClicks)
+	}
+}
+
 func TestFetchPageAndPlaybookTools(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")

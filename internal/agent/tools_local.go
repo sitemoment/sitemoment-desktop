@@ -267,6 +267,12 @@ func runBingQuery(ctx context.Context, env *Env, args map[string]any) (*Result, 
 	if argBool(args, "compare") {
 		pq := factQuery(env, args, dim, pf, pt)
 		pq.Limit = 500
+		if dim != "date" {
+			// Same widening as the current window: include the week the
+			// comparison period starts in.
+			f, _ := time.Parse(store.DayLayout, pf)
+			pq.From = f.AddDate(0, 0, -6).Format(store.DayLayout)
+		}
 		old, err := env.Store.BingQuery(ctx, pq)
 		if err != nil {
 			return nil, err
