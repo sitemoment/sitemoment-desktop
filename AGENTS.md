@@ -8,3 +8,4 @@
 - 界面风格以 `design/mockups/2-console.html` 为准；颜色用 `frontend/src/theme.css` 的变量。
 - 测试数据不能写进用户的数据目录：测试一律用 `t.TempDir()`；手工运行用 `SITEMOMENT_DATA_DIR=/tmp/...`。
 - `main.go` 嵌入 `frontend/dist`，所以 `go build ./...`、`go vet ./...` 之前先 `cd frontend && npm run build`，并 `wails3 generate bindings -ts -i`（和 `build/Taskfile.yml` 一致；也可以 `cd frontend && npm run bindings`）。裸的 `wails3 generate bindings` 只生成带 JSDoc 的 `.js`，没有 `.d.ts`，`api.ts` 对着它类型检查不严。
+- 发布见 `RELEASING.md`：版本来自 git tag，`build/` 里的版本号由 `cmd/stamp-version` 在 CI 里写入，不要手改提交；release 的文件名不带版本号（`internal/updates/assets.go`），不要改名。不要自己推 tag，除非负责人要求发布。不要运行 `wails3 task common:update:build-assets`：它用 Wails 的模板覆盖 `build/` 下改过的文件（产品信息、图标、Taskfile、NSIS）。
