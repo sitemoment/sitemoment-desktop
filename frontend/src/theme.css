@@ -124,3 +124,14 @@ main { flex: 1; min-width: 0; display: flex; flex-direction: column; background:
 .src-row:first-of-type { border-top: 0; }
 .src-name { flex: none; width: 120px; color: var(--text-3); }
 .src-row select { min-width: 200px; }
+
+.tag { font-family: var(--mono); font-size: 10.5px; padding: 1px 6px; border-radius: 4px; border: 1px solid; white-space: nowrap; background: none; }
+.tag-target { color: #5fd0e2; border-color: #1b4a55; }
+.tag-found { color: #e3b341; border-color: #4d3b12; }
+.tag-scene { color: #b4a2f7; border-color: #3a2f66; }
+select.tag { min-width: 0; }
+.kw-add textarea { flex: 1; resize: vertical; min-width: 0; }
+.kw-msg { grid-column: span 12; margin: 0; }
+.kwtable td { vertical-align: middle; }
+.kw-notes { min-width: 120px; width: 100%; padding: 2px 6px; }
+.modal-box p { color: var(--text-2); }
