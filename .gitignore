@@ -15,3 +15,6 @@ frontend/node_modules
 
 # Windows installer build input (wails3 generate webview2bootstrapper)
 /build/windows/nsis/MicrosoftEdgeWebview2Setup.exe
+
+# local env for make (Google OAuth client etc.)
+.env.local
