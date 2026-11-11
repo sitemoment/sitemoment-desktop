@@ -342,5 +342,8 @@ func Describe(err error) string {
 	case errors.Is(err, ErrUnknownCollector):
 		return "没有这个采集器，或者它还没有被允许运行"
 	}
-	return err.Error()
+	// Anything else may carry text from the page itself (a collector's
+	// error message); cap it before it goes into the run record or the
+	// UI.
+	return truncRunes(err.Error(), 300)
 }

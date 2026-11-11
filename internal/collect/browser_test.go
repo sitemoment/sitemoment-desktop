@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -249,6 +250,76 @@ func TestBrowserPoolWaits(t *testing.T) {
 	}
 	if h.news != 1 {
 		t.Fatalf("pool of 1 created %d windows", h.news)
+	}
+}
+
+func TestBrowserDropsOversizedMessages(t *testing.T) {
+	h := newHarness(1)
+	res := h.start(page)
+	w, _ := h.waitLoad(t, "collector-1")
+	h.b.Navigated("collector-1")
+	huge := msg(t, w, "result", `"`+strings.Repeat("x", maxMessageBytes)+`"`)
+	if len(huge) <= maxMessageBytes {
+		t.Fatalf("test message is not actually oversized: %d bytes", len(huge))
+	}
+	h.b.Handle("collector-1", huge, origin)
+	h.b.Handle("collector-1", msg(t, w, "result", `{"ok":true}`), origin)
+	if r := <-res; r.err != nil || string(r.data) != `{"ok":true}` {
+		t.Fatalf("oversized message should be dropped silently, then the real one delivered: %s, %v", r.data, r.err)
+	}
+}
+
+// TestBrowserLogFloodDoesNotStarveResult floods a run's log buffer past its
+// cap before the real result arrives, and checks that the result still
+// gets through: logs and the final message now travel on separate
+// channels, so a flood of one can never crowd out the other.
+func TestBrowserLogFloodDoesNotStarveResult(t *testing.T) {
+	h := newHarness(1)
+	res := h.start(page)
+	w, _ := h.waitLoad(t, "collector-1")
+	h.b.Navigated("collector-1")
+	for i := 0; i < maxLogLines*4; i++ {
+		h.b.Handle("collector-1", msg(t, w, "log", `{"message":"noise"}`), origin)
+	}
+	h.b.Handle("collector-1", msg(t, w, "result", `{"ok":true}`), origin)
+	if r := <-res; r.err != nil || string(r.data) != `{"ok":true}` {
+		t.Fatalf("result lost behind a log flood: %s, %v", r.data, r.err)
+	}
+}
+
+// TestBrowserSecondFinalMessageIsDropped checks that once a run's one
+// final-message slot is in flight, a second result/error/need_human is
+// dropped rather than blocking Handle or replacing the pending one.
+func TestBrowserSecondFinalMessageIsDropped(t *testing.T) {
+	h := newHarness(1)
+	res := h.start(page)
+	w, _ := h.waitLoad(t, "collector-1")
+	h.b.Navigated("collector-1")
+	h.b.Handle("collector-1", msg(t, w, "result", `{"first":true}`), origin)
+	h.b.Handle("collector-1", msg(t, w, "result", `{"second":true}`), origin) // dropped: a final message already pending or already read
+	if r := <-res; r.err != nil || string(r.data) != `{"first":true}` {
+		t.Fatalf("first result should win: %s, %v", r.data, r.err)
+	}
+}
+
+func TestBrowserTruncatesLongErrorText(t *testing.T) {
+	h := newHarness(1)
+	p := page
+	res := h.start(p)
+	w, _ := h.waitLoad(t, "collector-1")
+	h.b.Navigated("collector-1")
+	long := strings.Repeat("错", 500)
+	raw, _ := json.Marshal(map[string]string{"message": long})
+	h.b.Handle("collector-1", msg(t, w, "error", string(raw)), origin)
+	r := <-res
+	if r.err == nil {
+		t.Fatal("expected an error")
+	}
+	if n := len([]rune(r.err.Error())); n > 340 { // "collect: the collector failed: " + 300 runes + "…"
+		t.Fatalf("error text not truncated: %d runes", n)
+	}
+	if strings.Contains(r.err.Error(), strings.Repeat("错", 301)) {
+		t.Fatal("error text not truncated")
 	}
 }
 

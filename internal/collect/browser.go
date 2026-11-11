@@ -42,6 +42,17 @@ var (
 	ErrClosed       = errors.New("collect: the collector window was closed")
 )
 
+// maxMessageBytes caps a single raw collector message; anything larger is
+// dropped before it is even parsed.
+const maxMessageBytes = 1 << 20 // 1 MiB
+
+// maxLogLines caps how many "log" messages a run's buffer holds; a
+// flood of them is dropped (oldest kept, newest dropped) rather than
+// blocking or growing without bound. Unlike a result, error or
+// need_human message, a log line carries no protocol state, so losing
+// one beyond this cap costs nothing but observability.
+const maxLogLines = 20
+
 // Browser runs collectors in a small pool of windows. It routes every
 // message from a window to the run active in it, after checking the run's
 // id, nonce and the page's host; the first result ends the run and later
@@ -65,9 +76,17 @@ type slot struct {
 }
 
 type active struct {
-	run       Run
-	script    string
-	msgs      chan Message
+	run    Run
+	script string
+	// final carries the one message (result, error or need_human) that
+	// drives Load's state machine; it is never crowded out by a flood of
+	// "log" messages, which go through logs instead. Its buffer of 1 is
+	// enough: Load's select loop is the only reader and drains it
+	// essentially immediately, so a second send never has to wait long,
+	// and if it would, dropping it is correct (one final message per
+	// run already wins; see Handle).
+	final     chan Message
+	logs      chan string
 	closed    chan struct{}
 	closeOnce sync.Once
 	// ready becomes true only after Load has told the window to navigate
@@ -154,7 +173,7 @@ func (b *Browser) Load(ctx context.Context, p Page) (json.RawMessage, error) {
 		return nil, err
 	}
 	defer b.release(s)
-	act := &active{run: NewRun(p.Hosts...), msgs: make(chan Message, 8), closed: make(chan struct{})}
+	act := &active{run: NewRun(p.Hosts...), final: make(chan Message, 1), logs: make(chan string, maxLogLines), closed: make(chan struct{})}
 	act.script = Script(act.run, p.Script, p.Input)
 	b.mu.Lock()
 	s.act = act
@@ -183,7 +202,9 @@ func (b *Browser) Load(ctx context.Context, p Page) (json.RawMessage, error) {
 				return nil, ErrHumanTimeout
 			}
 			return nil, ErrTimeout
-		case m := <-act.msgs:
+		case line := <-act.logs:
+			b.logf("collector %s: %s", s.name, line)
+		case m := <-act.final:
 			switch m.Kind {
 			case "result":
 				if len(m.Data) == 0 || string(m.Data) == "null" {
@@ -195,7 +216,7 @@ func (b *Browser) Load(ctx context.Context, p Page) (json.RawMessage, error) {
 					Message string `json:"message"`
 				}
 				json.Unmarshal(m.Data, &e)
-				return nil, fmt.Errorf("collect: the collector failed: %s", e.Message)
+				return nil, fmt.Errorf("collect: the collector failed: %s", truncRunes(e.Message, 300))
 			case "need_human":
 				if waiting {
 					continue
@@ -216,11 +237,18 @@ func (b *Browser) Load(ctx context.Context, p Page) (json.RawMessage, error) {
 					}
 				}
 				timer.Reset(human)
-			case "log":
-				b.logf("collector %s: %s", s.name, m.Data)
 			}
 		}
 	}
+}
+
+// truncRunes shortens s to at most n runes, appending "…" if it was longer.
+func truncRunes(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n]) + "…"
 }
 
 func (b *Browser) activeIn(window string) (*slot, *active) {
@@ -246,12 +274,18 @@ func (b *Browser) Navigated(window string) {
 }
 
 // Handle takes a raw message from window's page (Wails RawMessageHandler);
-// origin is the sending frame's URL.
+// origin is the sending frame's URL. raw is never logged: only its kind
+// (once parsed) and size, never collector or page content, which could be
+// attacker-controlled.
 func (b *Browser) Handle(window, raw, origin string) {
+	if len(raw) > maxMessageBytes {
+		b.logf("collector %s: dropped an oversized message (%d bytes)", window, len(raw))
+		return
+	}
 	m, err := Parse(raw)
 	if err != nil {
 		if !errors.Is(err, ErrNotOurs) {
-			b.logf("collector %s: %v", window, err)
+			b.logf("collector %s: dropped an unparseable message (%d bytes): %v", window, len(raw), err)
 		}
 		return
 	}
@@ -260,13 +294,21 @@ func (b *Browser) Handle(window, raw, origin string) {
 		return
 	}
 	if err := Verify(act.run, m, origin); err != nil {
-		b.logf("collector %s: dropped a message: %v", window, err)
+		b.logf("collector %s: dropped a %s message (%d bytes): %v", window, m.Kind, len(m.Data), err)
+		return
+	}
+	if m.Kind == "log" {
+		select {
+		case act.logs <- string(m.Data):
+		default:
+			b.logf("collector %s: too many log messages, dropped one", window)
+		}
 		return
 	}
 	select {
-	case act.msgs <- m:
+	case act.final <- m:
 	default:
-		b.logf("collector %s: too many messages, dropped one", window)
+		b.logf("collector %s: dropped a %s message (one was already pending)", window, m.Kind)
 	}
 }
 

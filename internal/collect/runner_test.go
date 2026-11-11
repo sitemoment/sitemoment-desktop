@@ -149,3 +149,14 @@ func TestRunnerPostHook(t *testing.T) {
 		t.Fatalf("cache kept %s", res.Data)
 	}
 }
+
+func TestDescribeTruncatesLongText(t *testing.T) {
+	long := strings.Repeat("x", 1000)
+	got := Describe(errors.New(long))
+	if n := len([]rune(got)); n > 301 { // 300 runes + the "…" marker
+		t.Fatalf("Describe did not truncate: %d runes", n)
+	}
+	if !strings.HasSuffix(got, "…") {
+		t.Fatalf("Describe should mark truncation: %q", got)
+	}
+}
