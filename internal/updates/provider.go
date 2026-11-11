@@ -8,10 +8,20 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/wailsapp/wails/v3/pkg/updater"
 	"github.com/wailsapp/wails/v3/pkg/updater/providers/github"
 )
+
+// downloadSlack is added to Release.Artifact.Size to cap how much Download
+// will write: a compromised or misbehaving distribution channel that claims
+// a small size but streams unboundedly must not be allowed to write
+// unboundedly into the staging directory next to the installed app. Slack
+// (rather than an exact cap) allows for the artifact having grown slightly
+// between the API call that reported Size and the download, without
+// allowing unbounded growth.
+const downloadSlack = 1 << 20 // 1 MiB
 
 // ProviderConfig configures NewProvider.
 type ProviderConfig struct {
@@ -46,7 +56,10 @@ func NewProvider(c ProviderConfig) (updater.Provider, error) {
 		c.Repo = Repo
 	}
 	if c.HTTP == nil {
-		c.HTTP = &http.Client{}
+		// A large update zip over a slow connection must not hang forever
+		// under Go's zero (unlimited) default; a caller-supplied client
+		// (service.go sets its own) is never second-guessed.
+		c.HTTP = &http.Client{Timeout: 10 * time.Minute}
 	}
 	if c.DownloadBase == "" {
 		c.DownloadBase = "https://github.com"
@@ -71,8 +84,19 @@ func (p *checked) Check(ctx context.Context, req updater.CheckRequest) (*updater
 	if err != nil || rel == nil {
 		return rel, err
 	}
-	if rel.Verification == nil || len(rel.Verification.Digest) == 0 {
+	// Wails' checksum-sidecar parser only hex-decodes the first field of a
+	// SHA256SUMS line; it does not check the decoded length, so anything
+	// short of a full SHA-256 (a malformed line, a different hash function)
+	// must be rejected explicitly rather than treated as "has a digest".
+	if rel.Verification == nil || len(rel.Verification.Digest) != 32 {
 		return nil, fmt.Errorf("updates: release %s has no SHA-256 for %s in %s", rel.Version, rel.Artifact.Filename, Checksums)
+	}
+	// The release workflow publishes "-rc.N" tags as GitHub prereleases, and
+	// NewProvider never sets github.Config.Prerelease, so /releases/latest
+	// already excludes them in production; this is defense in depth against
+	// a stable install ever being offered one anyway.
+	if !strings.Contains(req.CurrentVersion, "-") && (rel.Channel == "prerelease" || strings.Contains(rel.Version, "-")) {
+		return nil, fmt.Errorf("updates: release %s is a prerelease; refusing to offer it to a stable install", rel.Version)
 	}
 	if p.cfg.PublicKey == nil {
 		// Integrity-only: no key compiled in, nothing to authenticate.
@@ -113,5 +137,25 @@ func (p *checked) fetchSignature(ctx context.Context, url string) ([]byte, error
 }
 
 func (p *checked) Download(ctx context.Context, rel *updater.Release, dst io.Writer, onProgress func(written, total int64)) error {
-	return p.inner.Download(ctx, rel, dst, onProgress)
+	limit := rel.Artifact.Size + downloadSlack
+	if rel.Artifact.Size <= 0 {
+		limit = downloadSlack
+	}
+	return p.inner.Download(ctx, rel, &capWriter{Writer: dst, remaining: limit}, onProgress)
+}
+
+// capWriter refuses once more than remaining bytes have been written: see
+// downloadSlack.
+type capWriter struct {
+	io.Writer
+	remaining int64
+}
+
+func (w *capWriter) Write(b []byte) (int, error) {
+	if int64(len(b)) > w.remaining {
+		return 0, fmt.Errorf("updates: download is larger than the declared size (+%d bytes slack)", downloadSlack)
+	}
+	n, err := w.Writer.Write(b)
+	w.remaining -= int64(n)
+	return n, err
 }

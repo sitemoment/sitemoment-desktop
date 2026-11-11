@@ -6,7 +6,6 @@ import (
 	"crypto/ed25519"
 	"errors"
 	"fmt"
-	"net/http"
 	"runtime"
 	"strconv"
 	"sync"
@@ -127,9 +126,7 @@ func New(ctx context.Context, o Options) *Service {
 	}
 	pc := o.Provider
 	pc.PublicKey = pub
-	if pc.HTTP == nil {
-		pc.HTTP = &http.Client{Timeout: 10 * time.Minute}
-	}
+	// NewProvider defaults HTTP to a 10-minute timeout when pc.HTTP is nil.
 	p, err := NewProvider(pc)
 	if err != nil {
 		return off(err.Error())

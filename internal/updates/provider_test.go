@@ -10,12 +10,14 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/wailsapp/wails/v3/pkg/updater"
 )
@@ -25,12 +27,14 @@ var ctx = context.Background()
 // fakeGitHub serves one release: the API, the update asset (a zip with one
 // top-level entry, like SiteMoment.app), SHA256SUMS and the .sig sidecar.
 type fakeGitHub struct {
-	srv      *httptest.Server
-	tag      string
-	payload  []byte
-	sums     string // SHA256SUMS body; "" = the correct line
-	sig      string // .sig body; "" = 404
-	apiCalls atomic.Int64
+	srv        *httptest.Server
+	tag        string
+	payload    []byte
+	sums       string // SHA256SUMS body; "" = the correct line
+	sig        string // .sig body; "" = 404
+	prerelease bool   // the API's "prerelease" field
+	oversized  bool   // serve far more than the declared asset Size
+	apiCalls   atomic.Int64
 }
 
 func newFakeGitHub(t *testing.T, tag string) *fakeGitHub {
@@ -46,7 +50,7 @@ func newFakeGitHub(t *testing.T, tag string) *fakeGitHub {
 		u := f.srv.URL
 		json.NewEncoder(w).Encode(map[string]any{
 			"tag_name": f.tag, "name": "SiteMoment " + f.tag, "body": "- 新功能", "published_at": "2026-11-20T08:00:00Z",
-			"html_url": "https://github.com/" + Repo + "/releases/tag/" + f.tag,
+			"html_url": "https://github.com/" + Repo + "/releases/tag/" + f.tag, "prerelease": f.prerelease,
 			"assets": []map[string]any{
 				{"id": 1, "name": WindowsInstaller, "size": 10, "url": u + "/asset/installer"},
 				{"id": 2, "name": asset, "size": len(f.payload), "url": u + "/asset/update"},
@@ -54,7 +58,15 @@ func newFakeGitHub(t *testing.T, tag string) *fakeGitHub {
 			},
 		})
 	})
-	mux.HandleFunc("/asset/update", func(w http.ResponseWriter, r *http.Request) { w.Write(f.payload) })
+	mux.HandleFunc("/asset/update", func(w http.ResponseWriter, r *http.Request) {
+		if f.oversized {
+			// Claims the small declared Size above, but streams much more:
+			// Download must refuse this once past the cap.
+			w.Write(bytes.Repeat([]byte{0}, len(f.payload)+2<<20))
+			return
+		}
+		w.Write(f.payload)
+	})
 	mux.HandleFunc("/asset/sums", func(w http.ResponseWriter, r *http.Request) {
 		if f.sums != "" {
 			fmt.Fprint(w, f.sums)
@@ -226,5 +238,74 @@ func TestProviderRejectsASignatureForADifferentAssetName(t *testing.T) {
 	}
 	if _, err := check(t, f, pk); err == nil || !strings.Contains(err.Error(), "signature") {
 		t.Fatalf("wrong asset name: %v", err)
+	}
+}
+
+// TestProviderRequiresAThirtyTwoByteDigest: Wails' checksum-sidecar parser
+// only hex-decodes the first field of a SHA256SUMS line, it does not check
+// the decoded length, so a malformed sidecar (wrong hash function, a
+// truncated line, a typo) could otherwise slip through as "has a digest".
+func TestProviderRequiresAThirtyTwoByteDigest(t *testing.T) {
+	f := newFakeGitHub(t, "v1.1.0")
+	name := UpdateAsset(runtime.GOOS, runtime.GOARCH)
+	f.sums = "ab  " + name + "\n" // valid hex, 1 byte, not a SHA-256
+	if _, err := check(t, f, nil); err == nil || !strings.Contains(err.Error(), "SHA-256") {
+		t.Fatalf("short digest: %v", err)
+	}
+}
+
+// TestProviderRejectsAPrereleaseForAStableInstall: the release workflow
+// publishes "-rc.N" tags as GitHub prereleases, and NewProvider never sets
+// github.Config.Prerelease, so /releases/latest already excludes them in
+// production. This is defense in depth against ever enabling that, a
+// provider change, or an unanticipated Channel value.
+func TestProviderRejectsAPrereleaseForAStableInstall(t *testing.T) {
+	f := newFakeGitHub(t, "v1.1.0")
+	f.prerelease = true
+	if _, err := check(t, f, nil); err == nil || !strings.Contains(err.Error(), "prerelease") {
+		t.Fatalf("prerelease for a stable install: %v", err)
+	}
+}
+
+// TestNewProviderDefaultsToATenMinuteTimeout documents the default: large
+// update zips over a slow connection must not be killed by Go's zero
+// (unlimited) default, but a caller-supplied client (including one with no
+// timeout) is never second-guessed.
+func TestNewProviderDefaultsToATenMinuteTimeout(t *testing.T) {
+	p, err := NewProvider(ProviderConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, ok := p.(*checked)
+	if !ok || c.cfg.HTTP == nil || c.cfg.HTTP.Timeout != 10*time.Minute {
+		t.Fatalf("default timeout: %+v", c.cfg.HTTP)
+	}
+	custom := &http.Client{}
+	p2, err := NewProvider(ProviderConfig{HTTP: custom})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p2.(*checked).cfg.HTTP != custom {
+		t.Fatal("NewProvider replaced a caller-supplied HTTP client")
+	}
+}
+
+// TestDownloadRefusesMuchMoreThanTheDeclaredSize: a compromised or
+// misbehaving distribution channel that claims a small Artifact.Size but
+// streams unboundedly must not be allowed to write unboundedly to the
+// staging directory next to the installed app.
+func TestDownloadRefusesMuchMoreThanTheDeclaredSize(t *testing.T) {
+	f := newFakeGitHub(t, "v1.1.0")
+	f.oversized = true
+	rel, err := check(t, f, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := NewProvider(ProviderConfig{APIBase: f.srv.URL, DownloadBase: f.srv.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Download(ctx, rel, io.Discard, nil); err == nil || !strings.Contains(err.Error(), "larger than") {
+		t.Fatalf("oversized download: %v", err)
 	}
 }

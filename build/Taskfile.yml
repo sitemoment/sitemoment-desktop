@@ -188,7 +188,11 @@ tasks:
     generates:
       - frontend/bindings/**/*
     cmds:
-      - wails3 generate bindings -f '{{.BUILD_FLAGS}}' -clean=true{{if eq .OBFUSCATED "true"}} -obfuscated{{end}} -ts -i
+      # silent: a release build's BUILD_FLAGS embeds RELEASE_LDFLAGS, which can
+      # carry GOOGLE_CLIENT_SECRET and UPDATE_PUBLIC_KEY; don't echo the command
+      # line that contains them into (CI) logs.
+      - cmd: wails3 generate bindings -f '{{.BUILD_FLAGS}}' -clean=true{{if eq .OBFUSCATED "true"}} -obfuscated{{end}} -ts -i
+        silent: true
 
   generate:icons:
     summary: Generates Windows `.ico` and Mac `.icns` from build/appicon.png (SiteMoment's icon; no Icon Composer `.icon`/Assets.car)

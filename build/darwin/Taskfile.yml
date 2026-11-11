@@ -47,9 +47,15 @@ tasks:
     preconditions:
       - sh: '{{if eq .OBFUSCATED "true"}}command -v garble >/dev/null 2>&1{{else}}true{{end}}'
         msg: "garble is required for obfuscated builds. Install it with: go install mvdan.cc/garble@v0.16.0 (requires Go 1.24+). See https://github.com/burrowers/garble/releases for version/toolchain compatibility."
+      - sh: '[ "{{.VERSION}}" = "dev" ] || go run ./cmd/stamp-version -check "{{.VERSION}}" >/dev/null'
+        msg: 'VERSION "{{.VERSION}}" is not a valid release version (see go run ./cmd/stamp-version -check); a production build sets VERSION from the release tag with its leading "v" stripped'
     cmds:
       - wails3 tool prepare-macos-output --dir "{{.BIN_DIR}}"
-      - '{{if eq .OBFUSCATED "true"}}garble {{.GARBLE_ARGS}} build{{else}}go build{{end}} {{.BUILD_FLAGS}} -o "{{.OUTPUT}}"'
+      # silent: a release build's BUILD_FLAGS embeds RELEASE_LDFLAGS, which can
+      # carry GOOGLE_CLIENT_SECRET and UPDATE_PUBLIC_KEY; don't echo the
+      # command line that contains them into (CI) logs.
+      - cmd: '{{if eq .OBFUSCATED "true"}}garble {{.GARBLE_ARGS}} build{{else}}go build{{end}} {{.BUILD_FLAGS}} -o "{{.OUTPUT}}"'
+        silent: true
     vars:
       BUILD_FLAGS: '{{if eq .DEV "true"}}{{if or .EXTRA_TAGS (eq .OBFUSCATED "true")}}-tags {{if eq .OBFUSCATED "true"}}wails_obfuscated{{if .EXTRA_TAGS}},{{end}}{{end}}{{.EXTRA_TAGS}} {{end}}-buildvcs=false -gcflags=all="-l"{{else}}-tags production{{if eq .OBFUSCATED "true"}},wails_obfuscated{{end}}{{if .EXTRA_TAGS}},{{.EXTRA_TAGS}}{{end}} -trimpath -buildvcs=false -ldflags="-w -s {{.RELEASE_LDFLAGS}}"{{end}}'
       DEFAULT_OUTPUT: '{{.BIN_DIR}}/{{.APP_NAME}}'
@@ -227,6 +233,6 @@ tasks:
       - rm -f "{{.BIN_DIR}}/{{.BUNDLE}}.dmg"
       - task: create:dmg
       - task: sign:dmg
-      - rm -rf "{{.RELEASE_DIR}}" && mkdir -p "{{.RELEASE_DIR}}"
+      - test -n "{{.RELEASE_DIR}}" && rm -rf -- "{{.RELEASE_DIR}}" && mkdir -p "{{.RELEASE_DIR}}"
       - ditto -c -k --norsrc --noextattr --keepParent "{{.BIN_DIR}}/{{.BUNDLE}}.app" "{{.RELEASE_DIR}}/SiteMoment-macos-universal.zip"
       - cp "{{.BIN_DIR}}/{{.BUNDLE}}.dmg" "{{.RELEASE_DIR}}/SiteMoment-macos-universal.dmg"

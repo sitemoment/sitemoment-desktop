@@ -32,6 +32,17 @@ opts=(--force --sign "$id")
 [ "$id" != "-" ] && opts+=(--timestamp)
 [ -n "${MAC_SIGN_KEYCHAIN:-}" ] && opts+=(--keychain "$MAC_SIGN_KEYCHAIN")
 
+# A partially-configured notary (e.g. a secret missing or misnamed in CI)
+# must fail loudly, not silently fall back to "signed but not notarized".
+notary_vars_set=0
+for v in MAC_NOTARY_KEY_FILE MAC_NOTARY_KEY_ID MAC_NOTARY_ISSUER_ID; do
+  [ -n "${!v:-}" ] && notary_vars_set=$((notary_vars_set + 1))
+done
+if [ "$notary_vars_set" -gt 0 ] && [ "$notary_vars_set" -lt 3 ]; then
+  echo "sign.sh: MAC_NOTARY_KEY_FILE, MAC_NOTARY_KEY_ID and MAC_NOTARY_ISSUER_ID must be set together; $notary_vars_set of 3 are set" >&2
+  exit 1
+fi
+
 notary_ready() {
   [ "$id" != "-" ] && [ -n "${MAC_NOTARY_KEY_FILE:-}" ] && [ -n "${MAC_NOTARY_KEY_ID:-}" ] && [ -n "${MAC_NOTARY_ISSUER_ID:-}" ]
 }
@@ -74,6 +85,9 @@ dmg)
     notarize "$path"
     xcrun stapler staple "$path"
     xcrun stapler validate "$path"
+    # context:primary-signature is the disk-image assessment (the "app"
+    # branch's --type execute does not apply to a .dmg).
+    spctl -a -t open --context context:primary-signature -v "$path"
   else
     echo "sign.sh: notary key not set; $path is signed but not notarized"
   fi

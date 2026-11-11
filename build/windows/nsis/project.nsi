@@ -68,9 +68,14 @@ ManifestDPIAware true
 
 !insertmacro MUI_LANGUAGE "English" # Set the Language of the installer
 
-## The following two statements can be used to sign the installer and the uninstaller. The path to the binaries are provided in %1
-#!uninstfinalize 'signtool --file "%1"'
-#!finalize 'signtool --file "%1"'
+## Sign the generated uninstaller (makensis runs this at compile time, on the
+## CI runner, with %1 substituted for the uninstaller's path; sign.ps1 itself
+## no-ops without WINDOWS_CERT_PFX, so this is always safe to run).
+!uninstfinalize 'pwsh -NoProfile -ExecutionPolicy Bypass -File "..\sign.ps1" "%1"'
+## Signing the installer (setup.exe) itself is not wired yet (left for a
+## later task): !finalize would run here the same way, with %1 the
+## installer's own path.
+#!finalize 'pwsh -NoProfile -ExecutionPolicy Bypass -File "..\sign.ps1" "%1"'
 
 Name "${INFO_PRODUCTNAME}"
 OutFile "..\..\..\bin\${INFO_PROJECTNAME}-${ARCH}-installer.exe" # Name of the installer's file; the release renames it to SiteMoment-windows-amd64-setup.exe
