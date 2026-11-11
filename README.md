@@ -90,7 +90,14 @@
 ```bash
 cd frontend && npm run bindings   # 生成 Wails TS 绑定
 SITEMOMENT_DATA_DIR=/tmp/smd-dev \
-SITEMOMENT_GOOGLE_CLIENT_ID=<负责人提供> SITEMOMENT_GOOGLE_CLIENT_SECRET=<负责人提供> \
+wails3 dev
+```
+
+Google 登录（Search Console、GA4）的 OAuth client 默认来自 SiteMoment 后端的集中配置（`GET /v1/desktop/config`，负责人在后台 sitemoment.com/admx → 桌面客户端 设置，owner decision 2026-11-11：因为用户可能连接多个 Google 账号，不再要求每个人各自申请一个 Google Cloud 的「桌面应用」客户端）；应用启动时在后台拉取一次，并缓存在本地设置表，离线也能用上次拉到的配置。本地开发想用自己的 Google OAuth 客户端（不走后端那份）时，设置 `SITEMOMENT_GOOGLE_CLIENT_ID` / `SITEMOMENT_GOOGLE_CLIENT_SECRET`（env/ldflags 覆盖优先于后端配置，`internal/app/googleconfig.go`），例如：
+
+```bash
+SITEMOMENT_DATA_DIR=/tmp/smd-dev \
+SITEMOMENT_GOOGLE_CLIENT_ID=<自己的 client id> SITEMOMENT_GOOGLE_CLIENT_SECRET=<自己的 secret> \
 wails3 dev
 ```
 
@@ -130,7 +137,7 @@ wails3 dev
 | 变量 | 作用 |
 |---|---|
 | `SITEMOMENT_API` | SiteMoment 后端地址，默认 `https://sitemoment.com/api` |
-| `SITEMOMENT_GOOGLE_CLIENT_ID` / `SITEMOMENT_GOOGLE_CLIENT_SECRET` | Google OAuth「桌面应用」客户端 |
+| `SITEMOMENT_GOOGLE_CLIENT_ID` / `SITEMOMENT_GOOGLE_CLIENT_SECRET` | 可选：覆盖 Google OAuth「桌面应用」客户端，不设置时用后端的集中配置（见上） |
 | `SITEMOMENT_DATA_DIR` | 数据目录，默认系统应用数据目录下的 `SiteMoment` |
 
 测试：`go test ./...`

@@ -167,8 +167,8 @@ unsigned; the release notes say how to open it on each platform.
 |---|---|---|
 | `UPDATE_PUBLIC_KEY` | repository variable | The update-signing public key (base64); compiled into the client. **Required** for a real release. |
 | `UPDATE_SIGNING_KEY` | secret on the `release` **environment** (with required reviewers) | The update-signing private key (base64, a 32-byte seed). **Required** for a real release; never a plain repository secret. |
-| `GOOGLE_CLIENT_ID` | repository variable | Google OAuth "desktop app" client ID. Without it, the released client cannot reach Google |
-| `GOOGLE_CLIENT_SECRET` | repository secret | That client's secret (Google itself documents that a desktop client's secret is not confidential, but it still is not committed to the repository) |
+| `GOOGLE_CLIENT_ID` | repository variable | Optional: bakes in a Google OAuth "desktop app" client ID that overrides the backend's central configuration (`GET /v1/desktop/config`, set by the owner in the admin console). Without it, the released client still reaches Google, using whatever the backend hands out at runtime |
+| `GOOGLE_CLIENT_SECRET` | repository secret | That override client's secret (Google itself documents that a desktop client's secret is not confidential, but it still is not committed to the repository) |
 | `MAC_CERT_P12_BASE64` | repository secret | The "Developer ID Application" certificate and its key, exported as a .p12, base64 |
 | `MAC_CERT_PASSWORD` | repository secret | The .p12's password |
 | `MAC_SIGN_IDENTITY` | repository secret | The certificate's name, e.g. `Developer ID Application: Example Ltd (ABCDE12345)` |
