@@ -2,19 +2,18 @@
 package updates
 
 import (
-	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/base64"
 	"testing"
 )
 
-func TestSignDigestIsWhatTheUpdaterVerifies(t *testing.T) {
+func TestSignReleaseBindsTagAndAssetName(t *testing.T) {
 	pub, seed, err := GenerateKey()
 	if err != nil {
 		t.Fatal(err)
 	}
 	digest := sha256.Sum256([]byte("artifact"))
-	sig, err := SignDigest(seed, digest[:])
+	sig, err := SignRelease(seed, "v1.2.3", "SiteMoment-macos-universal.zip", digest[:])
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -23,11 +22,29 @@ func TestSignDigestIsWhatTheUpdaterVerifies(t *testing.T) {
 		t.Fatal(err)
 	}
 	raw, err := ParseSignature([]byte(sig + "\n"))
-	if err != nil || !ed25519.Verify(pk, digest[:], raw) {
-		t.Fatalf("verify: %v", err)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if _, err := SignDigest(base64.StdEncoding.EncodeToString([]byte("short")), digest[:]); err == nil {
+	if !VerifyRelease(pk, "v1.2.3", "SiteMoment-macos-universal.zip", digest[:], raw) {
+		t.Fatal("a correctly-signed release did not verify")
+	}
+	// The signature is bound to the exact tag, asset name and digest: any of
+	// the three changing must invalidate it (replay / asset-swap protection).
+	if VerifyRelease(pk, "v1.2.4", "SiteMoment-macos-universal.zip", digest[:], raw) {
+		t.Fatal("verified under a different tag")
+	}
+	if VerifyRelease(pk, "v1.2.3", "SiteMoment-windows-amd64.zip", digest[:], raw) {
+		t.Fatal("verified under a different asset name")
+	}
+	other := sha256.Sum256([]byte("different"))
+	if VerifyRelease(pk, "v1.2.3", "SiteMoment-macos-universal.zip", other[:], raw) {
+		t.Fatal("verified under a different digest")
+	}
+	if _, err := SignRelease(base64.StdEncoding.EncodeToString([]byte("short")), "v1.2.3", "a.zip", digest[:]); err == nil {
 		t.Fatal("accepted a bad seed")
+	}
+	if _, err := SignRelease(seed, "v1.2.3", "a.zip", []byte("short")); err == nil {
+		t.Fatal("accepted a non-SHA-256-sized digest")
 	}
 	if _, err := ParseSignature([]byte("abc")); err == nil {
 		t.Fatal("accepted a bad signature")

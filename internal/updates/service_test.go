@@ -167,14 +167,18 @@ func TestSignedReleases(t *testing.T) {
 		t.Fatal(err)
 	}
 	f := newFakeGitHub(t, "v1.1.0")
-	// No .sig: refused before anything is downloaded.
+	name := UpdateAsset(runtime.GOOS, runtime.GOARCH)
+	// No .sig: refused at check time, before anything is downloaded.
 	s, _ := newTestService(t, f, "1.0.0", pub, &memSettings{})
 	if _, err := s.Check(); err == nil || !strings.Contains(err.Error(), "signature") {
 		t.Fatalf("unsigned release: %v", err)
 	}
-	// A good signature installs.
+	if st := s.Status(); st.State != StateError || st.Stage != "check" {
+		t.Fatalf("unsigned release status = %+v", st)
+	}
+	// A good signature, bound to this exact tag and asset name, installs.
 	sum := sha256.Sum256(f.payload)
-	if f.sig, err = SignDigest(seed, sum[:]); err != nil {
+	if f.sig, err = SignRelease(seed, f.tag, name, sum[:]); err != nil {
 		t.Fatal(err)
 	}
 	s, _ = newTestService(t, f, "1.0.0", pub, &memSettings{})
@@ -185,16 +189,16 @@ func TestSignedReleases(t *testing.T) {
 	if st := waitState(t, s, StateReady, StateError); st.State != StateReady {
 		t.Fatalf("signed = %+v", st)
 	}
-	// A signature by another key fails verification.
+	// A signature by another key is refused at check time too (our provider
+	// verifies it, not Wails' own download/verify step).
 	_, other, _ := GenerateKey()
-	f.sig, _ = SignDigest(other, sum[:])
+	f.sig, _ = SignRelease(other, f.tag, name, sum[:])
 	s, _ = newTestService(t, f, "1.0.0", pub, &memSettings{})
-	if _, err := s.Check(); err != nil {
-		t.Fatal(err)
+	if _, err := s.Check(); err == nil || !strings.Contains(err.Error(), "signature") {
+		t.Fatalf("wrong key: %v", err)
 	}
-	s.Install()
-	if st := waitState(t, s, StateReady, StateError); st.State != StateError || st.Stage != "verify" {
-		t.Fatalf("wrong key = %+v", st)
+	if st := s.Status(); st.State != StateError || st.Stage != "check" {
+		t.Fatalf("wrong key status = %+v", st)
 	}
 }
 

@@ -3,6 +3,7 @@ package updates
 
 import (
 	"context"
+	"crypto/ed25519"
 	"errors"
 	"fmt"
 	"net/http"
@@ -77,12 +78,12 @@ type engine interface {
 // Options configures New.
 type Options struct {
 	Version   string // the running version (main.version)
-	PublicKey string // base64 Ed25519 key; "" accepts SHA-256-checked releases without a signature
+	PublicKey string // base64 Ed25519 key; "" accepts SHA-256-checked releases without a signature (integrity-only, see RELEASING.md)
 	Settings  Settings
 	Emit      func(name string, data any) // "update:status" to the main window
 	OnFound   func(version string)        // the daily check found a new release (notification)
 	Quit      func()                      // quits the app so the updater's helper can swap it in
-	Provider  ProviderConfig              // Signed is set from PublicKey
+	Provider  ProviderConfig              // PublicKey is set from the parsed Options.PublicKey
 }
 
 // Service is the app's update service (bound to the frontend as
@@ -116,16 +117,16 @@ func New(ctx context.Context, o Options) *Service {
 	if UpdateAsset(runtime.GOOS, runtime.GOARCH) == "" {
 		return off("这个平台没有自动更新，请到 GitHub Releases 下载新版本")
 	}
-	var key []byte
+	var pub ed25519.PublicKey
 	if o.PublicKey != "" {
 		pk, err := ParsePublicKey(o.PublicKey)
 		if err != nil {
 			return off(err.Error())
 		}
-		key = pk
+		pub = pk
 	}
 	pc := o.Provider
-	pc.Signed = key != nil
+	pc.PublicKey = pub
 	if pc.HTTP == nil {
 		pc.HTTP = &http.Client{Timeout: 10 * time.Minute}
 	}
@@ -134,7 +135,12 @@ func New(ctx context.Context, o Options) *Service {
 		return off(err.Error())
 	}
 	u := updater.New(&host{s: s, quit: o.Quit})
-	if err := u.Init(updater.Config{CurrentVersion: o.Version, Providers: []updater.Provider{p}, PublicKey: key, Window: updater.WindowNone}); err != nil {
+	// Verification, including any signature, is this package's job (see the
+	// checked provider in provider.go): the Release it returns never carries
+	// a Signature, only a digest-only Verification, so Wails' own
+	// Config.PublicKey stays empty here — it would otherwise require every
+	// release to carry a Signature it never sees and reject them all.
+	if err := u.Init(updater.Config{CurrentVersion: o.Version, Providers: []updater.Provider{p}, Window: updater.WindowNone}); err != nil {
 		return off(err.Error())
 	}
 	s.u = u
