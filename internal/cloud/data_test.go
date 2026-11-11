@@ -79,6 +79,16 @@ func TestCatalogQuoteAndData(t *testing.T) {
 	}
 }
 
+func TestQuoteTooLarge(t *testing.T) {
+	c := dataClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"tool":"lookup_keywords","label":"关键词库存数据","maxCredits":999,"cached":false,"tooLarge":true,"message":"这次请求太大，请减少关键词数量或 limit"}`))
+	})
+	q, err := c.Quote(ctx, "lookup_keywords", map[string]any{"keywords": []string{"a"}})
+	if err != nil || !q.TooLarge || q.Message != "这次请求太大，请减少关键词数量或 limit" {
+		t.Fatalf("Quote tooLarge = %+v, %v", q, err)
+	}
+}
+
 func TestDataErrors(t *testing.T) {
 	c := dataClient(t, func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {

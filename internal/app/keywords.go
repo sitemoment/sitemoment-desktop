@@ -300,6 +300,13 @@ func (k *KeywordService) QuoteCloud(ctx context.Context, siteID int64, ids []int
 		if err != nil {
 			return CloudQuote{}, cloudMessage(err)
 		}
+		if q.TooLarge {
+			// The server already knows this batch's worst case is over its
+			// per-call budget: the data call behind it would only come back
+			// 400 request_too_large, so refuse now instead of showing a
+			// confirm for a request that can never succeed.
+			return CloudQuote{}, errors.New("这次请求太大，请减少选中的关键词数量")
+		}
 		out.Label = q.Label
 		out.MaxCredits += q.MaxCredits
 		out.Cached = out.Cached && q.Cached

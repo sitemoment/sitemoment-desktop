@@ -18,8 +18,9 @@ import (
 // fakeCloud answers lookup_keywords with volume = 100 x the keyword's
 // length, KD 20 and CPC "0.5" for every keyword except "ghost".
 type fakeCloud struct {
-	batches [][]string
-	err     error
+	batches  [][]string
+	err      error
+	tooLarge bool
 }
 
 func (f *fakeCloud) words(params map[string]any) []string { return params["keywords"].([]string) }
@@ -27,6 +28,9 @@ func (f *fakeCloud) words(params map[string]any) []string { return params["keywo
 func (f *fakeCloud) Quote(_ context.Context, tool string, params map[string]any) (cloud.Quote, error) {
 	if f.err != nil {
 		return cloud.Quote{}, f.err
+	}
+	if f.tooLarge {
+		return cloud.Quote{Tool: tool, Label: "关键词库存数据", MaxCredits: 999, TooLarge: true, Message: "这次请求太大，请减少关键词数量或 limit"}, nil
 	}
 	return cloud.Quote{Tool: tool, Label: "关键词库存数据", MaxCredits: 1.5}, nil
 }
@@ -183,6 +187,21 @@ func TestKeywordCloudBatchesAndErrors(t *testing.T) {
 	}
 	if _, err := k.FetchCloud(ctx, site.ID, ids(l.Keywords)[:1]); err == nil || !strings.Contains(err.Error(), "登录") {
 		t.Fatalf("FetchCloud signed out = %v", err)
+	}
+}
+
+// TestKeywordQuoteCloudRefusesTooLarge covers the server marking a tool's
+// worst case as always over its per-call budget: QuoteCloud must refuse
+// with a clear message instead of returning a quote the app would then
+// offer to confirm (the data call behind it would only come back 400
+// request_too_large).
+func TestKeywordQuoteCloudRefusesTooLarge(t *testing.T) {
+	k, _, site, fc, _ := keywordService(t)
+	fc.tooLarge = true
+	k.Add(ctx, site.ID, "ai chat", store.KindTarget)
+	l, _ := k.List(ctx, site.ID, "")
+	if _, err := k.QuoteCloud(ctx, site.ID, ids(l.Keywords)); err == nil || !strings.Contains(err.Error(), "太大") {
+		t.Fatalf("QuoteCloud tooLarge = %v", err)
 	}
 }
 

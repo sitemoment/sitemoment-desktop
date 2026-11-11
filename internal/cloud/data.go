@@ -28,12 +28,17 @@ type Tool struct {
 	Enabled    bool     `json:"enabled"`
 }
 
-// Quote is what a data call would cost at most (0 when cached).
+// Quote is what a data call would cost at most (0 when cached). TooLarge
+// means this call's worst case is always over the server's per-call
+// budget: it would never succeed (the data call itself comes back 400
+// request_too_large), so callers should refuse it before asking to confirm.
 type Quote struct {
 	Tool       string  `json:"tool"`
 	Label      string  `json:"label"`
 	MaxCredits float64 `json:"maxCredits"`
 	Cached     bool    `json:"cached"`
+	TooLarge   bool    `json:"tooLarge"`
+	Message    string  `json:"message"`
 }
 
 // DataResult is a paid data answer; Credits is what it cost.
