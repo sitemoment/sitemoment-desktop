@@ -26,6 +26,15 @@ export function fmtTime(unix: number): string {
   return new Date(unix * 1000).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
 }
 
+/** Progress's gscsync.Progress.Slice / "ga:"+gasync's slice names, in
+ * Chinese, for the status bar (which otherwise shows the raw English
+ * slice key). Unknown keys pass through unchanged. */
+const sliceNames: Record<string, string> = {
+  date: "日期", query: "查询词", page: "页面",
+  "ga:date": "日期", "ga:landing": "着陆页", "ga:channel": "渠道",
+};
+export const sliceLabel = (slice: string): string => sliceNames[slice] ?? slice;
+
 /**
  * The status bar's left-hand label for a site's sync state: paused beats
  * everything else (nothing syncs while paused), then the site's own
@@ -36,7 +45,7 @@ export function syncStatusLabel(status: SyncStatus | undefined, paused: boolean,
   if (paused) return "已暂停";
   switch (status?.state) {
     case "running":
-      return ownProgress ? `同步中 ${ownProgress.slice} ${ownProgress.done}/${ownProgress.total}` : "同步中";
+      return ownProgress ? `同步中 ${sliceLabel(ownProgress.slice)} ${ownProgress.done}/${ownProgress.total}` : "同步中";
     case "failed":
       return `同步失败：${status.error ?? ""}`;
     case "stopped":
@@ -54,13 +63,20 @@ export function coverageText(sl: SliceProgress | null): string {
   return `${sl.daysCovered} / ${sl.daysInRange} 天`;
 }
 
-/** The 进度表's "状态" cell for a source: its state, plus a next-backfill
- * hint while backfilling, plus the error while failed. */
-export function sourceStateText(src: SourceProgress): string {
-  let text: string = src.state;
-  if (src.state === "回填中" && src.nextBackfillAt) text += `（约 ${fmtTime(src.nextBackfillAt)} 继续）`;
-  if (src.state === "失败" && src.error) text += `：${src.error}`;
-  return text;
+/** The 进度表's per-slice "状态" cell: a source-wide condition (已暂停 /
+ * 同步中 / 失败, with the error) overrides every one of its slices;
+ * otherwise each slice shows its own coverage state (回填中 / 已完成) — so,
+ * for example, "date" can show 已完成 while "query" still shows 回填中. */
+export function sliceStateText(src: SourceProgress, sl: SliceProgress | null): string {
+  const overrides = src.state === "已暂停" || src.state === "同步中" || src.state === "失败";
+  const state = overrides || !sl ? src.state : sl.state;
+  return state === "失败" && src.error ? `${state}：${src.error}` : state;
+}
+
+/** The 进度表's "下次回填" cell: when a source is 回填中 and the backfill
+ * loop has a schedule for it, the time it will next check; "—" otherwise. */
+export function nextBackfillText(src: SourceProgress): string {
+  return src.state === "回填中" && src.nextBackfillAt ? fmtTime(src.nextBackfillAt) : "—";
 }
 
 export type Delta = { text: string; up: boolean } | null;

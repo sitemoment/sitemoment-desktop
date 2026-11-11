@@ -14,8 +14,8 @@ import type { Overview, Site, SyncProgress, SyncStatus } from "../types";
 // progress events too, but throttled: a backfill can emit one per request.
 const PROGRESS_REFRESH_INTERVAL_MS = 5000;
 
-export function OverviewPage({ site, status, onChanged, onOpenHealth }: {
-  site: Site; status?: SyncStatus; onChanged: () => void; onOpenHealth: () => void;
+export function OverviewPage({ site, status, paused, onChanged, onOpenHealth }: {
+  site: Site; status?: SyncStatus; paused?: boolean; onChanged: () => void; onOpenHealth: () => void;
 }) {
   const [days, setDays] = useState(28);
   const [ov, setOv] = useState<Overview | null>(null);
@@ -60,13 +60,18 @@ export function OverviewPage({ site, status, onChanged, onOpenHealth }: {
         <div className="seg">
           {[7, 28, 90].map((d) => <button key={d} className={d === days ? "on" : ""} onClick={() => setDays(d)}>{d}d</button>)}
         </div>
-        <button className="btn" disabled={running} onClick={() => api.syncNow(site.id)}>{running ? "同步中…" : "立即同步"}</button>
+        <button className="btn" disabled={running || paused} title={paused ? "已暂停自动同步，先取消暂停" : undefined}
+          onClick={() => api.syncNow(site.id).catch((e) => setErr(errText(e)))}>
+          {paused ? "已暂停自动同步，先取消暂停" : running ? "同步中…" : "立即同步"}
+        </button>
       </div>
       <div className="content">
         {err && <p className="error">{err}</p>}
         {!ov?.synced ? (
           <>
-            <div className="empty">{running ? "正在同步 Search Console 数据。第一次会回填 16 个月，大约需要几分钟。" : "还没有数据，点「立即同步」。"}</div>
+            <div className="empty">
+              {paused ? "已暂停自动同步，先在设置 → 同步里取消暂停。" : running ? "正在同步 Search Console 数据。第一次会回填 16 个月，大约需要几分钟。" : "还没有数据，点「立即同步」。"}
+            </div>
             <HealthPanel site={site} wide onOpen={onOpenHealth} />
           </>
         ) : (

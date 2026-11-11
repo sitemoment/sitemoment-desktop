@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { api, errText, onEvent } from "../api";
-import { coverageText, fmtTime, sourceStateText } from "../format";
+import { coverageText, fmtTime, nextBackfillText, sliceStateText } from "../format";
 import type { SiteProgress, SyncStatus } from "../types";
 
 /** Settings → 同步: the pause switch and the sync progress table (进度表). */
@@ -48,7 +48,7 @@ export function SyncPanel() {
       {rows.length > 0 && (
         <table className="qtable sync-progress">
           <thead>
-            <tr><th>站点</th><th>数据源</th><th>统计维度</th><th>覆盖范围</th><th>最新数据</th><th>最近同步</th><th>状态</th></tr>
+            <tr><th>站点</th><th>数据源</th><th>统计维度</th><th>覆盖范围</th><th>最新数据</th><th>最近同步</th><th>状态</th><th>下次回填</th></tr>
           </thead>
           <tbody>
             {rows.flatMap((site) =>
@@ -62,7 +62,8 @@ export function SyncPanel() {
                     <td>{coverageText(sl)}</td>
                     <td className="mono">{sl?.newestDay || "—"}</td>
                     <td>{sl?.lastFetched ? fmtTime(sl.lastFetched) : "—"}</td>
-                    {i === 0 ? <td rowSpan={slices.length}>{sourceStateText(src)}</td> : null}
+                    <td>{sliceStateText(src, sl)}</td>
+                    {i === 0 ? <td rowSpan={slices.length}>{nextBackfillText(src)}</td> : null}
                   </tr>
                 ));
               }),

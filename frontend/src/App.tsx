@@ -181,14 +181,14 @@ export default function App() {
           ) : page === "reports" ? (
             <ReportsPage key={site.id} site={site} openId={openReport} />
           ) : (
-            <OverviewPage key={site.id} site={site} status={statuses[site.id]} onChanged={reloadSites} onOpenHealth={() => setPage("health")} />
+            <OverviewPage key={site.id} site={site} status={statuses[site.id]} paused={syncPaused} onChanged={reloadSites} onOpenHealth={() => setPage("health")} />
           )}
         </main>
         {agentOpen && <AgentPanel site={site} account={account} modelRev={modelRev} onOpenSettings={() => setPage("settings")} onCreditsUsed={refreshAccount} />}
       </div>
       <StatusBar status={site ? statuses[site.id] : undefined} progress={site ? progress[site.id] ?? null : null} info={info} siteId={site?.id}
         account={account} collect={collect} paused={syncPaused}
-        onStop={site ? () => api.stopSync(site.id) : undefined}>
+        onStop={site ? () => api.stopSync(site.id).catch((e) => setError(errText(e))) : undefined}>
         <Notices onOpen={openNotice} />
       </StatusBar>
       {adding && (

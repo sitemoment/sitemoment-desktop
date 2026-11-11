@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   change, coverageText, fmtBytes, fmtCompact, fmtCredits, fmtDate, fmtDateTime, fmtPct, guessBingSite, guessGAProperty, guessProperty, healthState,
-  kdClass, metricNote, niceScale, nextHumanRun, noticeTarget, outcomeText, posChange, sourceStateText, syncStatusLabel,
+  kdClass, metricNote, niceScale, nextBackfillText, nextHumanRun, noticeTarget, outcomeText, posChange, sliceLabel, sliceStateText, syncStatusLabel,
 } from "./format";
 import type { RunView, SliceProgress, SourceProgress, SyncStatus } from "./types";
 
@@ -128,12 +128,20 @@ describe("health, tasks and notices", () => {
 
     expect(syncStatusLabel(undefined, false, null)).toBe("未同步");
     expect(syncStatusLabel(running, false, null)).toBe("同步中");
-    expect(syncStatusLabel(running, false, { siteId: 1, slice: "query", day: "2026-11-09", done: 3, total: 7 })).toBe("同步中 query 3/7");
+    expect(syncStatusLabel(running, false, { siteId: 1, slice: "query", day: "2026-11-09", done: 3, total: 7 })).toBe("同步中 查询词 3/7");
     expect(syncStatusLabel(failed, false, null)).toBe("同步失败：Google 接口限流，稍后自动重试");
     expect(syncStatusLabel(stopped, false, null)).toBe("已停止同步");
     expect(syncStatusLabel(done, false, null)).toBe("● 已同步 08:00");
     // Paused overrides every other state, including a run still "running".
     expect(syncStatusLabel(running, true, null)).toBe("已暂停");
+  });
+  it("translates a sync slice key to Chinese, passing unknown keys through", () => {
+    expect(sliceLabel("date")).toBe("日期");
+    expect(sliceLabel("query")).toBe("查询词");
+    expect(sliceLabel("page")).toBe("页面");
+    expect(sliceLabel("ga:landing")).toBe("着陆页");
+    expect(sliceLabel("ga:channel")).toBe("渠道");
+    expect(sliceLabel("mystery")).toBe("mystery");
   });
   it("shows a slice's days-covered coverage, or an em dash when unknown", () => {
     const sl: SliceProgress = { slice: "query", label: "查询词", daysCovered: 90, daysInRange: 480, state: "回填中" };
@@ -141,14 +149,34 @@ describe("health, tasks and notices", () => {
     expect(coverageText(null)).toBe("—");
     expect(coverageText({ ...sl, daysInRange: 0 })).toBe("—");
   });
-  it("appends a next-backfill hint or an error to a source's progress state", () => {
+  it("shows a slice's own state, unless the source's own condition overrides it", () => {
+    const backfilling: SourceProgress = { source: "gsc", label: "Search Console", state: "回填中" };
+    const done: SourceProgress = { source: "gsc", label: "Search Console", state: "已完成" };
+    const paused: SourceProgress = { source: "gsc", label: "Search Console", state: "已暂停" };
+    const syncing: SourceProgress = { source: "gsc", label: "Search Console", state: "同步中" };
+    const failed: SourceProgress = { source: "gsc", label: "Search Console", state: "失败", error: "Google 授权已失效，请在设置里重新连接" };
+    const dateSlice: SliceProgress = { slice: "date", label: "按日期", daysCovered: 480, daysInRange: 480, state: "已完成" };
+    const querySlice: SliceProgress = { slice: "query", label: "查询词", daysCovered: 90, daysInRange: 480, state: "回填中" };
+
+    // Normally, each slice shows its own coverage state, independent of
+    // the source's (so "date" can be done while "query" still lags).
+    expect(sliceStateText(backfilling, dateSlice)).toBe("已完成");
+    expect(sliceStateText(backfilling, querySlice)).toBe("回填中");
+    // But paused, syncing or failed override every slice.
+    expect(sliceStateText(paused, dateSlice)).toBe("已暂停");
+    expect(sliceStateText(syncing, querySlice)).toBe("同步中");
+    expect(sliceStateText(failed, dateSlice)).toBe("失败：Google 授权已失效，请在设置里重新连接");
+    // No slice at all (Bing's one-row source): just the source's state.
+    expect(sliceStateText(done, null)).toBe("已完成");
+  });
+  it("shows the backfill loop's next scheduled check, only while backfilling", () => {
     const at = Math.floor(new Date(2026, 10, 10, 8, 0).getTime() / 1000);
     const backfilling: SourceProgress = { source: "gsc", label: "Search Console", state: "回填中", nextBackfillAt: at };
-    const failed: SourceProgress = { source: "gsc", label: "Search Console", state: "失败", error: "Google 授权已失效，请在设置里重新连接" };
-    const done: SourceProgress = { source: "gsc", label: "Search Console", state: "已完成" };
+    const noSchedule: SourceProgress = { source: "gsc", label: "Search Console", state: "回填中" };
+    const done: SourceProgress = { source: "gsc", label: "Search Console", state: "已完成", nextBackfillAt: at };
 
-    expect(sourceStateText(backfilling)).toBe("回填中（约 08:00 继续）");
-    expect(sourceStateText(failed)).toBe("失败：Google 授权已失效，请在设置里重新连接");
-    expect(sourceStateText(done)).toBe("已完成");
+    expect(nextBackfillText(backfilling)).toBe("08:00");
+    expect(nextBackfillText(noSchedule)).toBe("—");
+    expect(nextBackfillText(done)).toBe("—");
   });
 });
