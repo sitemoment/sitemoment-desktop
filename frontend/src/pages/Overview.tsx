@@ -3,6 +3,7 @@ import { api, errText, onEvent } from "../api";
 import { BindGSC } from "../components/BindGSC";
 import { BindSources } from "../components/BindSources";
 import { ClicksChart } from "../components/ClicksChart";
+import { HealthPanel } from "../components/HealthPanel";
 import { KpiRow } from "../components/KpiRow";
 import { QueriesTable } from "../components/QueriesTable";
 import { fmtInt, fmtTime } from "../format";
@@ -13,7 +14,9 @@ import type { Overview, Site, SyncProgress, SyncStatus } from "../types";
 // progress events too, but throttled: a backfill can emit one per request.
 const PROGRESS_REFRESH_INTERVAL_MS = 5000;
 
-export function OverviewPage({ site, status, onChanged }: { site: Site; status?: SyncStatus; onChanged: () => void }) {
+export function OverviewPage({ site, status, onChanged, onOpenHealth }: {
+  site: Site; status?: SyncStatus; onChanged: () => void; onOpenHealth: () => void;
+}) {
   const [days, setDays] = useState(28);
   const [ov, setOv] = useState<Overview | null>(null);
   const [err, setErr] = useState("");
@@ -62,11 +65,14 @@ export function OverviewPage({ site, status, onChanged }: { site: Site; status?:
       <div className="content">
         {err && <p className="error">{err}</p>}
         {!ov?.synced ? (
-          <div className="empty">{running ? "正在同步 Search Console 数据。第一次会回填 16 个月，大约需要几分钟。" : "还没有数据，点「立即同步」。"}</div>
+          <>
+            <div className="empty">{running ? "正在同步 Search Console 数据。第一次会回填 16 个月，大约需要几分钟。" : "还没有数据，点「立即同步」。"}</div>
+            <HealthPanel site={site} wide onOpen={onOpenHealth} />
+          </>
         ) : (
           <>
             <KpiRow ov={ov} />
-            <section className="panel">
+            <section className="panel p-chart">
               <div className="chart-head">
                 <div>
                   <div className="chart-title">每日点击 · 本期与上期</div>
@@ -79,6 +85,7 @@ export function OverviewPage({ site, status, onChanged }: { site: Site; status?:
               </div>
               <ClicksChart cur={ov.daily} prev={ov.prevDaily} />
             </section>
+            <HealthPanel site={site} onOpen={onOpenHealth} />
             <section className="panel">
               <h2>查询词 <span className="mono">前 {ov.queries.length} 个，按点击</span></h2>
               <QueriesTable rows={ov.queries} to={ov.to} />

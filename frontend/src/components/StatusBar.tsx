@@ -1,9 +1,10 @@
+import type { ReactNode } from "react";
 import { fmtBytes, fmtCredits, fmtTime } from "../format";
 import type { Account, CollectorStats, Info, SyncProgress, SyncStatus } from "../types";
 
-export function StatusBar({ status, progress, info, siteId, account, collect }: {
+export function StatusBar({ status, progress, info, siteId, account, collect, children }: {
   status?: SyncStatus; progress: SyncProgress | null; info: Info | null; siteId?: number; account?: Account | null;
-  collect?: CollectorStats | null;
+  collect?: CollectorStats | null; children?: ReactNode;
 }) {
   let left = "未同步";
   const ownProgress = progress && progress.siteId === siteId ? progress : null;
@@ -22,6 +23,7 @@ export function StatusBar({ status, progress, info, siteId, account, collect }: 
       )}
       {collect?.today.filter((d) => d.count > 0).map((d) => <span key={d.collector}>{d.name} {d.count} / {d.limit}</span>)}
       <span className="right">
+        {children}
         {info && <span>SQLite {fmtBytes(info.dbBytes)}</span>}
         {account?.signedIn && account.creditsLimit > 0 && (
           <span title={`${account.creditsMonth} 的 SiteMoment 积分（托管模型和付费数据共用）`}>
