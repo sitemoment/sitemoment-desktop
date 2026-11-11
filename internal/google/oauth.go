@@ -34,14 +34,43 @@ var (
 	ErrScopes = errors.New("google: Search Console access was not granted")
 )
 
-// OAuth is a Google OAuth client of type "Desktop app".
+// OAuth is a Google OAuth client of type "Desktop app". ClientID and
+// ClientSecret are the env/ldflags override: set once at construction (see
+// main.go) and never written again, so reading them needs no lock. When
+// they are empty, the dynamic client set by SetClient is used instead (the
+// desktop app's central configuration, fetched from the SiteMoment backend
+// and cached locally; see internal/app.GoogleConfig). SetClient may be
+// called at any time from a different goroutine than the one reading the
+// client via AccessToken/AuthCodeURL/Exchange/Configured, so that pair is
+// guarded by mu.
 type OAuth struct {
 	ClientID, ClientSecret string
 	AuthURL, TokenURL      string // empty: Google's
 	HTTP                   *http.Client
 
-	mu    sync.Mutex
-	cache map[string]cachedToken // by sha256 of the refresh token
+	mu                             sync.Mutex
+	dynamicClientID, dynamicSecret string
+	cache                          map[string]cachedToken // by sha256 of (client id, refresh token)
+}
+
+// SetClient sets the OAuth client used when ClientID is not set at
+// construction (the backend's central configuration, or a cached copy of
+// it). Safe to call concurrently with any other OAuth method.
+func (o *OAuth) SetClient(id, secret string) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.dynamicClientID, o.dynamicSecret = id, secret
+}
+
+// client resolves the OAuth client to use: the env/ldflags override from
+// construction, else the dynamic one set by SetClient.
+func (o *OAuth) client() (id, secret string) {
+	if o.ClientID != "" {
+		return o.ClientID, o.ClientSecret
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.dynamicClientID, o.dynamicSecret
 }
 
 type cachedToken struct {
@@ -64,13 +93,15 @@ type tokenResponse struct {
 	Error        string `json:"error"`
 }
 
-// Configured reports whether a client ID is set.
-func (o *OAuth) Configured() bool { return o.ClientID != "" }
+// Configured reports whether a client ID is set (the env/ldflags override,
+// or one set by SetClient).
+func (o *OAuth) Configured() bool { id, _ := o.client(); return id != "" }
 
 // AuthCodeURL is the consent page address.
 func (o *OAuth) AuthCodeURL(redirectURI, state, challenge string) string {
+	id, _ := o.client()
 	q := url.Values{
-		"client_id": {o.ClientID}, "redirect_uri": {redirectURI}, "response_type": {"code"}, "scope": {Scopes},
+		"client_id": {id}, "redirect_uri": {redirectURI}, "response_type": {"code"}, "scope": {Scopes},
 		"state": {state}, "code_challenge": {challenge}, "code_challenge_method": {"S256"},
 		"access_type": {"offline"}, "prompt": {"consent"}, "include_granted_scopes": {"true"},
 	}
@@ -83,9 +114,10 @@ func (o *OAuth) AuthCodeURL(redirectURI, state, challenge string) string {
 
 // Exchange trades the code for a refresh token and the account email.
 func (o *OAuth) Exchange(ctx context.Context, code, verifier, redirectURI string) (Grant, error) {
+	id, secret := o.client()
 	tr, err := o.post(ctx, url.Values{
 		"code": {code}, "code_verifier": {verifier}, "redirect_uri": {redirectURI},
-		"client_id": {o.ClientID}, "client_secret": {o.ClientSecret}, "grant_type": {"authorization_code"},
+		"client_id": {id}, "client_secret": {secret}, "grant_type": {"authorization_code"},
 	})
 	if err != nil {
 		return Grant{}, err
@@ -100,14 +132,20 @@ func (o *OAuth) Exchange(ctx context.Context, code, verifier, redirectURI string
 	if err != nil {
 		return Grant{}, err
 	}
-	o.remember(tr.RefreshToken, tr)
+	o.remember(id, tr.RefreshToken, tr)
 	return Grant{Email: email, RefreshToken: tr.RefreshToken}, nil
 }
 
 // AccessToken returns an access token for the refresh token, cached until a
-// minute before it expires.
+// minute before it expires. The cache is keyed by the client id as well as
+// the refresh token: if the client changes (the backend's configuration
+// changed), a cached token minted for the old client is never served back,
+// and the refresh token is sent to Google again under the new client id
+// (where, having been issued to a different client, it is expected to come
+// back ErrReauth).
 func (o *OAuth) AccessToken(ctx context.Context, refreshToken string) (string, error) {
-	key := cacheKey(refreshToken)
+	id, secret := o.client()
+	key := cacheKey(id, refreshToken)
 	o.mu.Lock()
 	if c, ok := o.cache[key]; ok && time.Now().Before(c.expires) {
 		o.mu.Unlock()
@@ -115,12 +153,12 @@ func (o *OAuth) AccessToken(ctx context.Context, refreshToken string) (string, e
 	}
 	o.mu.Unlock()
 	tr, err := o.post(ctx, url.Values{
-		"refresh_token": {refreshToken}, "client_id": {o.ClientID}, "client_secret": {o.ClientSecret}, "grant_type": {"refresh_token"},
+		"refresh_token": {refreshToken}, "client_id": {id}, "client_secret": {secret}, "grant_type": {"refresh_token"},
 	})
 	if err != nil {
 		return "", err
 	}
-	o.remember(refreshToken, tr)
+	o.remember(id, refreshToken, tr)
 	return tr.AccessToken, nil
 }
 
@@ -136,18 +174,20 @@ func hasWebmastersScope(scope string) bool {
 	return false
 }
 
-func cacheKey(refreshToken string) string {
-	sum := sha256.Sum256([]byte(refreshToken))
+// cacheKey mixes the client id into the hash so a changed client never
+// shares a cache entry with the old one.
+func cacheKey(clientID, refreshToken string) string {
+	sum := sha256.Sum256([]byte(clientID + "\x00" + refreshToken))
 	return hex.EncodeToString(sum[:])
 }
 
-func (o *OAuth) remember(refreshToken string, tr tokenResponse) {
+func (o *OAuth) remember(clientID, refreshToken string, tr tokenResponse) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	if o.cache == nil {
 		o.cache = map[string]cachedToken{}
 	}
-	o.cache[cacheKey(refreshToken)] = cachedToken{token: tr.AccessToken, expires: time.Now().Add(time.Duration(tr.ExpiresIn)*time.Second - time.Minute)}
+	o.cache[cacheKey(clientID, refreshToken)] = cachedToken{token: tr.AccessToken, expires: time.Now().Add(time.Duration(tr.ExpiresIn)*time.Second - time.Minute)}
 }
 
 func (o *OAuth) post(ctx context.Context, form url.Values) (tokenResponse, error) {
