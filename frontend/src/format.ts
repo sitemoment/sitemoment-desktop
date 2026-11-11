@@ -1,4 +1,4 @@
-import type { BingSite, GAProperty, KeywordKind, Metric, Outcome, Property, RunView, TaskStatus } from "./types";
+import type { BingSite, GAProperty, KeywordKind, Metric, Outcome, Property, RunView, SliceProgress, SourceProgress, SyncProgress, SyncStatus, TaskStatus } from "./types";
 
 export const fmtInt = (n: number) => Math.round(n).toLocaleString("en-US");
 
@@ -24,6 +24,43 @@ export function fmtBytes(b: number): string {
 
 export function fmtTime(unix: number): string {
   return new Date(unix * 1000).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
+}
+
+/**
+ * The status bar's left-hand label for a site's sync state: paused beats
+ * everything else (nothing syncs while paused), then the site's own
+ * SyncStatus (running — with the in-flight slice's progress if known,
+ * failed, stopped, or done), else "未同步" for a site that has never synced.
+ */
+export function syncStatusLabel(status: SyncStatus | undefined, paused: boolean, ownProgress: SyncProgress | null): string {
+  if (paused) return "已暂停";
+  switch (status?.state) {
+    case "running":
+      return ownProgress ? `同步中 ${ownProgress.slice} ${ownProgress.done}/${ownProgress.total}` : "同步中";
+    case "failed":
+      return `同步失败：${status.error ?? ""}`;
+    case "stopped":
+      return "已停止同步";
+    case "done":
+      return `● 已同步 ${fmtTime(status.at)}`;
+    default:
+      return "未同步";
+  }
+}
+
+/** The 进度表's "覆盖范围" cell for one slice: "12 / 480 天", or "—" when unknown. */
+export function coverageText(sl: SliceProgress | null): string {
+  if (!sl || sl.daysInRange <= 0) return "—";
+  return `${sl.daysCovered} / ${sl.daysInRange} 天`;
+}
+
+/** The 进度表's "状态" cell for a source: its state, plus a next-backfill
+ * hint while backfilling, plus the error while failed. */
+export function sourceStateText(src: SourceProgress): string {
+  let text: string = src.state;
+  if (src.state === "回填中" && src.nextBackfillAt) text += `（约 ${fmtTime(src.nextBackfillAt)} 继续）`;
+  if (src.state === "失败" && src.error) text += `：${src.error}`;
+  return text;
 }
 
 export type Delta = { text: string; up: boolean } | null;

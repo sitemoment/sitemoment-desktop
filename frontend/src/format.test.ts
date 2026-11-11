@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
-  change, fmtBytes, fmtCompact, fmtCredits, fmtDate, fmtDateTime, fmtPct, guessBingSite, guessGAProperty, guessProperty, healthState, kdClass, metricNote,
-  niceScale, nextHumanRun, noticeTarget, outcomeText, posChange,
+  change, coverageText, fmtBytes, fmtCompact, fmtCredits, fmtDate, fmtDateTime, fmtPct, guessBingSite, guessGAProperty, guessProperty, healthState,
+  kdClass, metricNote, niceScale, nextHumanRun, noticeTarget, outcomeText, posChange, sourceStateText, syncStatusLabel,
 } from "./format";
-import type { RunView } from "./types";
+import type { RunView, SliceProgress, SourceProgress, SyncStatus } from "./types";
 
 describe("format", () => {
   it("compacts big numbers", () => {
@@ -116,5 +116,39 @@ describe("health, tasks and notices", () => {
     const t = new Date(2026, 10, 10, 8, 5).getTime() / 1000;
     expect(fmtDateTime(t)).toBe("11-10 08:05");
     expect(fmtDate(t)).toBe("2026-11-10");
+  });
+  it("labels the status bar's sync state, paused beating everything else", () => {
+    // Built from a local wall-clock time, like fmtDateTime's test above, so
+    // the expectation does not depend on the host's time zone.
+    const at = Math.floor(new Date(2026, 10, 10, 8, 0).getTime() / 1000);
+    const running: SyncStatus = { siteId: 1, state: "running", requests: 0, at };
+    const failed: SyncStatus = { siteId: 1, state: "failed", error: "Google 接口限流，稍后自动重试", requests: 0, at };
+    const stopped: SyncStatus = { siteId: 1, state: "stopped", requests: 0, at };
+    const done: SyncStatus = { siteId: 1, state: "done", requests: 3, at };
+
+    expect(syncStatusLabel(undefined, false, null)).toBe("未同步");
+    expect(syncStatusLabel(running, false, null)).toBe("同步中");
+    expect(syncStatusLabel(running, false, { siteId: 1, slice: "query", day: "2026-11-09", done: 3, total: 7 })).toBe("同步中 query 3/7");
+    expect(syncStatusLabel(failed, false, null)).toBe("同步失败：Google 接口限流，稍后自动重试");
+    expect(syncStatusLabel(stopped, false, null)).toBe("已停止同步");
+    expect(syncStatusLabel(done, false, null)).toBe("● 已同步 08:00");
+    // Paused overrides every other state, including a run still "running".
+    expect(syncStatusLabel(running, true, null)).toBe("已暂停");
+  });
+  it("shows a slice's days-covered coverage, or an em dash when unknown", () => {
+    const sl: SliceProgress = { slice: "query", label: "查询词", daysCovered: 90, daysInRange: 480, state: "回填中" };
+    expect(coverageText(sl)).toBe("90 / 480 天");
+    expect(coverageText(null)).toBe("—");
+    expect(coverageText({ ...sl, daysInRange: 0 })).toBe("—");
+  });
+  it("appends a next-backfill hint or an error to a source's progress state", () => {
+    const at = Math.floor(new Date(2026, 10, 10, 8, 0).getTime() / 1000);
+    const backfilling: SourceProgress = { source: "gsc", label: "Search Console", state: "回填中", nextBackfillAt: at };
+    const failed: SourceProgress = { source: "gsc", label: "Search Console", state: "失败", error: "Google 授权已失效，请在设置里重新连接" };
+    const done: SourceProgress = { source: "gsc", label: "Search Console", state: "已完成" };
+
+    expect(sourceStateText(backfilling)).toBe("回填中（约 08:00 继续）");
+    expect(sourceStateText(failed)).toBe("失败：Google 授权已失效，请在设置里重新连接");
+    expect(sourceStateText(done)).toBe("已完成");
   });
 });

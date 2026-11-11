@@ -5,8 +5,8 @@ import {
 } from "../bindings/github.com/sitemoment/sitemoment-desktop/internal/app";
 import type {
   Account, BingSite, CloudQuote, CollectorStats, CollectorView, Connection, FetchResult, GAProperty, HealthView, Info, KeywordKind, KeywordList,
-  ModelSettings, NoticeList, Overview, PageFilter, PageList, Property, Report, RunView, SessionView, Site, SiteHealth, SpendMode, SyncStatus,
-  TaskView, Transcript,
+  ModelSettings, NoticeList, Overview, PageFilter, PageList, Property, Report, RunView, SessionView, Site, SiteHealth, SiteProgress, SpendMode,
+  SyncStatus, TaskView, Transcript,
 } from "./types";
 import { Service as UpdateService } from "../bindings/github.com/sitemoment/sitemoment-desktop/internal/updates";
 import type { UpdateStatus } from "./types";
@@ -55,7 +55,11 @@ export const api = {
   bindGA: (id: number, account: string, property: string) => call<void>(SiteService.BindGA(id, account, property)),
   bindBing: (id: number, account: string, siteUrl: string) => call<void>(SiteService.BindBing(id, account, siteUrl)),
   syncNow: (id: number) => call<void>(SyncService.SyncNow(id)),
+  stopSync: (id: number) => call<void>(SyncService.Stop(id)),
   syncStatuses: () => call<SyncStatus[]>(SyncService.Statuses()),
+  syncPaused: () => call<boolean>(SyncService.Paused()),
+  setSyncPaused: (paused: boolean) => call<void>(SyncService.SetPaused(paused)),
+  syncProgress: () => call<SiteProgress[]>(SyncService.Progress()),
   overview: (id: number, days: number) => call<Overview>(OverviewService.Get(id, days)),
   keywords: (siteId: number, kind: "" | KeywordKind) => call<KeywordList>(KeywordService.List(siteId, kind)),
   addKeywords: (siteId: number, text: string, kind: KeywordKind) => call<number>(KeywordService.Add(siteId, text, kind)),

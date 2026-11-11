@@ -7,6 +7,7 @@ import { UpdatePanel } from "../components/UpdatePanel";
 import { NotifyPanel } from "../components/NotifyPanel";
 import { PrivacyPanel } from "../components/PrivacyPanel";
 import { NetworkPanel } from "../components/NetworkPanel";
+import { SyncPanel } from "../components/SyncPanel";
 import { GoogleAuthLink } from "../components/GoogleAuthLink";
 import type { Account, Connection, Info, Site } from "../types";
 
@@ -141,6 +142,7 @@ export function SettingsPage(props: {
           </div>
         ))}
       </section>
+      <SyncPanel />
       <NetworkPanel />
       <UpdatePanel />
       <NotifyPanel />

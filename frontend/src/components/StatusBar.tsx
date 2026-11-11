@@ -1,23 +1,17 @@
 import type { ReactNode } from "react";
-import { fmtBytes, fmtCredits, fmtTime } from "../format";
+import { fmtBytes, fmtCredits, syncStatusLabel } from "../format";
 import type { Account, CollectorStats, Info, SyncProgress, SyncStatus } from "../types";
 
-export function StatusBar({ status, progress, info, siteId, account, collect, children }: {
+export function StatusBar({ status, progress, info, siteId, account, collect, paused, onStop, children }: {
   status?: SyncStatus; progress: SyncProgress | null; info: Info | null; siteId?: number; account?: Account | null;
-  collect?: CollectorStats | null; children?: ReactNode;
+  collect?: CollectorStats | null; paused?: boolean; onStop?: () => void; children?: ReactNode;
 }) {
-  let left = "未同步";
   const ownProgress = progress && progress.siteId === siteId ? progress : null;
-  if (status?.state === "running") {
-    left = ownProgress ? `同步中 ${ownProgress.slice} ${ownProgress.done}/${ownProgress.total}` : "同步中";
-  } else if (status?.state === "failed") {
-    left = `同步失败：${status.error ?? ""}`;
-  } else if (status?.state === "done") {
-    left = `● 已同步 ${fmtTime(status.at)}`;
-  }
+  const left = syncStatusLabel(status, Boolean(paused), ownProgress);
   return (
     <div className="statusbar">
       <span>{left}</span>
+      {!paused && status?.state === "running" && onStop && <button className="btn" onClick={onStop}>停止同步</button>}
       {collect && (collect.running > 0 || collect.queued > 0) && (
         <span>{collect.running > 0 && <i className="spin" />} 采集器运行 {collect.running}，排队 {collect.queued}</span>
       )}
