@@ -82,7 +82,7 @@ func parseRobots(body []byte) robotsInfo {
 			}
 			// An empty Disallow allows everything: it is no rule at all.
 			if cur != nil && val != "" {
-				cur.rules = append(cur.rules, robotsRule{allow: key == "allow", pattern: val})
+				cur.rules = append(cur.rules, robotsRule{allow: key == "allow", pattern: percentNormalize(val)})
 			}
 		}
 		prevAgent = false
@@ -110,6 +110,7 @@ func (ri *robotsInfo) allowed(agent, rawURL string) bool {
 	if u.RawQuery != "" {
 		p += "?" + u.RawQuery
 	}
+	p = percentNormalize(p)
 	agent = strings.ToLower(agent)
 	var own, star []robotsRule
 	for _, g := range ri.groups {
@@ -136,6 +137,46 @@ func (ri *robotsInfo) allowed(agent, rawURL string) bool {
 		}
 	}
 	return allow
+}
+
+const hexDigits = "0123456789ABCDEF"
+
+// percentNormalize mirrors how url.EscapedPath encodes a path: every
+// non-ASCII byte becomes %XX (upper-case hex) and any %-escape already
+// present is upper-cased. Applied to both rule patterns (at parse time) and
+// the request path (at match time), so a rule written with raw UTF-8 (e.g.
+// "Disallow: /café") or a lower-case escape (e.g. "%2f") still compares
+// byte for byte against Go's escaped path, as RFC 9309 §2.2.2 requires.
+func percentNormalize(s string) string {
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case c == '%' && i+2 < len(s) && isHexDigit(s[i+1]) && isHexDigit(s[i+2]):
+			b.WriteByte('%')
+			b.WriteByte(upperHexDigit(s[i+1]))
+			b.WriteByte(upperHexDigit(s[i+2]))
+			i += 2
+		case c < 0x80:
+			b.WriteByte(c)
+		default:
+			b.WriteByte('%')
+			b.WriteByte(hexDigits[c>>4])
+			b.WriteByte(hexDigits[c&0xF])
+		}
+	}
+	return b.String()
+}
+
+func isHexDigit(c byte) bool {
+	return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')
+}
+
+func upperHexDigit(c byte) byte {
+	if c >= 'a' && c <= 'f' {
+		return c - 'a' + 'A'
+	}
+	return c
 }
 
 // robotsMatch matches a rule pattern against a path: "*" is any run of

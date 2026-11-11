@@ -22,6 +22,19 @@ func TestRobotsStripsBOM(t *testing.T) {
 	}
 }
 
+func TestRobotsNonASCIIAndPercentCase(t *testing.T) {
+	ri := parseRobots([]byte("User-agent: *\nDisallow: /café\nDisallow: /brace%7bb\n"))
+	if ri.allowed("x", "https://e.com/café") {
+		t.Fatal("a non-ASCII Disallow rule must match the percent-encoded path (RFC 9309 §2.2.2)")
+	}
+	if ri.allowed("x", "https://e.com/brace{b") {
+		t.Fatal("a lower-case percent-escape in robots.txt must still match an upper-case-escaped path")
+	}
+	if !ri.allowed("x", "https://e.com/unrelated") {
+		t.Fatal("unrelated paths must stay allowed")
+	}
+}
+
 func TestRobotsAllowed(t *testing.T) {
 	ri := parseRobots([]byte(`User-agent: *
 Disallow: /private
