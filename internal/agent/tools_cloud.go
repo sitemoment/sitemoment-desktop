@@ -13,6 +13,11 @@ import (
 // catalogTTL is how long the paid data catalog is reused.
 const catalogTTL = 10 * time.Minute
 
+// catalogFetchTimeout bounds a catalog fetch so a slow network can't block
+// the caller (Start/Resume build the toolset synchronously): on timeout the
+// turn just runs without paid tools instead of hanging.
+const catalogFetchTimeout = 2 * time.Second
+
 // paidSpec describes one SiteMoment data tool to the model.
 type paidSpec struct {
 	name        string // agent tool name
@@ -64,7 +69,9 @@ func (d *Deps) cloudCatalog(ctx context.Context) ([]cloud.Tool, error) {
 		return d.catalog, nil
 	}
 	d.mu.Unlock()
-	list, err := d.Cloud.Catalog(ctx)
+	cctx, cancel := context.WithTimeout(ctx, catalogFetchTimeout)
+	defer cancel()
+	list, err := d.Cloud.Catalog(cctx)
 	if err != nil {
 		return nil, err
 	}

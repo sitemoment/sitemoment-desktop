@@ -2,6 +2,7 @@
 package agent
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -209,6 +210,37 @@ func TestCollectorTools(t *testing.T) {
 	ui, model := describeError(err)
 	if !strings.Contains(ui, "人工验证") || !strings.Contains(model, "谷歌搜索结果（付费）") {
 		t.Fatalf("describe %q %q", ui, model)
+	}
+}
+
+// slowCloud shadows Catalog with one that blocks until delay or ctx.Done(),
+// to test that fetching the catalog can't block the caller indefinitely.
+type slowCloud struct {
+	*fakeCloud
+	delay time.Duration
+}
+
+func (f *slowCloud) Catalog(ctx context.Context) ([]cloud.Tool, error) {
+	select {
+	case <-time.After(f.delay):
+		return f.fakeCloud.Catalog(ctx)
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+func TestCloudCatalogFetchDoesNotBlockIndefinitely(t *testing.T) {
+	sc := &slowCloud{fakeCloud: &fakeCloud{signedIn: true}, delay: time.Hour}
+	env := siteEnv(t, &Deps{Cloud: sc})
+	done := make(chan []*Tool, 1)
+	go func() { done <- cloudTools(ctx, env.Deps) }()
+	select {
+	case tools := <-done:
+		if len(tools) != 0 {
+			t.Fatalf("got tools from a catalog fetch that should have timed out: %v", tools)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("cloudTools did not return within 3s despite a slow catalog")
 	}
 }
 
