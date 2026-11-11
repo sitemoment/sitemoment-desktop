@@ -46,6 +46,12 @@ type GAReport struct {
 	Start, End string
 	Dimensions []string
 	Metrics    []string
+	// OnPage, when set, is called before every page's HTTP request (most
+	// reports are one page; a few are not) and must return a release func
+	// to call once that page's request is done. This is where a caller
+	// plugs in a ratelimit.Limiter: Acquiring once for the whole Report
+	// would under-count a paginated report's real request rate.
+	OnPage func(ctx context.Context) (release func(), err error)
 }
 
 // GARow is one report row: Dims follow the report's Dimensions (dates as
@@ -156,7 +162,19 @@ func (g *GA) Report(ctx context.Context, token, property string, r GAReport) ([]
 			} `json:"rows"`
 			RowCount int `json:"rowCount"`
 		}
-		if err := callJSON(ctx, g.caller(), http.MethodPost, endpoint, token, body, &page); err != nil {
+		var release func()
+		if r.OnPage != nil {
+			rl, err := r.OnPage(ctx)
+			if err != nil {
+				return nil, err
+			}
+			release = rl
+		}
+		err := callJSON(ctx, g.caller(), http.MethodPost, endpoint, token, body, &page)
+		if release != nil {
+			release()
+		}
+		if err != nil {
 			return nil, err
 		}
 		for _, pr := range page.Rows {

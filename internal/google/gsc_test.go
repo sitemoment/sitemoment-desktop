@@ -62,6 +62,50 @@ func TestQueryPaginates(t *testing.T) {
 	}
 }
 
+func TestQueryCallsOnPageOncePerPage(t *testing.T) {
+	var starts []int
+	g := &GSC{RowLimit: 2, HTTP: client(func(r *http.Request) (*http.Response, error) {
+		var body map[string]any
+		json.NewDecoder(r.Body).Decode(&body)
+		start := int(body["startRow"].(float64))
+		starts = append(starts, start)
+		if start == 0 {
+			return reply(200, `{"rows":[{"keys":["2026-11-01"],"clicks":1,"impressions":1},{"keys":["2026-11-01"],"clicks":1,"impressions":1}]}`)
+		}
+		return reply(200, `{"rows":[{"keys":["2026-11-01"],"clicks":1,"impressions":1}]}`)
+	})}
+	var onPageCalls, released int
+	q := Query{Start: "2026-11-01", End: "2026-11-01", Dimensions: []string{"date"}, OnPage: func(context.Context) (func(), error) {
+		onPageCalls++
+		return func() { released++ }, nil
+	}}
+	rows, err := g.Query(ctx, "tok", "https://a.example.com/", q)
+	if err != nil || len(rows) != 3 {
+		t.Fatalf("Query = %+v, %v", rows, err)
+	}
+	if onPageCalls != 2 || released != 2 {
+		t.Fatalf("OnPage called %d times, released %d, want 2 and 2 (one per HTTP page)", onPageCalls, released)
+	}
+}
+
+func TestQueryOnPageErrorStopsBeforeTheRequest(t *testing.T) {
+	calls := 0
+	g := &GSC{HTTP: client(func(*http.Request) (*http.Response, error) {
+		calls++
+		return reply(200, `{"rows":[]}`)
+	})}
+	wantErr := errors.New("rate limiter: context done")
+	q := Query{Start: "2026-11-01", End: "2026-11-01", Dimensions: []string{"date"}, OnPage: func(context.Context) (func(), error) {
+		return nil, wantErr
+	}}
+	if _, err := g.Query(ctx, "tok", "https://a.example.com/", q); !errors.Is(err, wantErr) {
+		t.Fatalf("err = %v, want %v", err, wantErr)
+	}
+	if calls != 0 {
+		t.Fatalf("HTTP called %d times, want 0 (OnPage failed before the request)", calls)
+	}
+}
+
 func TestQueryAggregationTypeByPage(t *testing.T) {
 	g := &GSC{HTTP: client(func(r *http.Request) (*http.Response, error) {
 		var body map[string]any

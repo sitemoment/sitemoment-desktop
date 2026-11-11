@@ -2,6 +2,7 @@
 package google
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -71,6 +72,29 @@ func TestGAReportPaginates(t *testing.T) {
 	}
 	if !reflect.DeepEqual(offsets, []float64{0, 2}) {
 		t.Fatalf("offsets = %v", offsets)
+	}
+}
+
+func TestGAReportCallsOnPageOncePerPage(t *testing.T) {
+	g := &GA{RowLimit: 2, HTTP: client(func(r *http.Request) (*http.Response, error) {
+		var body map[string]any
+		json.NewDecoder(r.Body).Decode(&body)
+		if body["offset"] == float64(0) {
+			return reply(200, `{"rows":[
+				{"dimensionValues":[{"value":"20261101"}],"metricValues":[{"value":"1"},{"value":"1"},{"value":"1"},{"value":"0"}]},
+				{"dimensionValues":[{"value":"20261102"}],"metricValues":[{"value":"1"},{"value":"1"},{"value":"1"},{"value":"0"}]}],"rowCount":3}`)
+		}
+		return reply(200, `{"rows":[{"dimensionValues":[{"value":"20261103"}],"metricValues":[{"value":"1"},{"value":"1"},{"value":"1"},{"value":"0"}]}],"rowCount":3}`)
+	})}
+	var onPageCalls, released int
+	r := GAReport{Start: "2026-11-01", End: "2026-11-03", Dimensions: []string{"date"}, Metrics: []string{"sessions", "totalUsers", "engagedSessions", "keyEvents"},
+		OnPage: func(context.Context) (func(), error) { onPageCalls++; return func() { released++ }, nil }}
+	rows, err := g.Report(ctx, "tok", "properties/123", r)
+	if err != nil || len(rows) != 3 {
+		t.Fatalf("Report = %+v, %v", rows, err)
+	}
+	if onPageCalls != 2 || released != 2 {
+		t.Fatalf("OnPage called %d times, released %d, want 2 and 2 (one per HTTP page)", onPageCalls, released)
 	}
 }
 
