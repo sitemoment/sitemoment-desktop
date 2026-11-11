@@ -58,7 +58,11 @@ main { flex: 1; min-width: 0; display: flex; flex-direction: column; background:
    item like .kpis get squashed down to its smallest content (just the
    label line) instead of sizing to its full content height. */
 .content { flex: 1; overflow: auto; padding: 14px; display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); grid-auto-rows: max-content; gap: 12px; align-content: start; }
-.panel { background: var(--surface-1); border: 1px solid var(--line); border-radius: 8px; padding: 12px; grid-column: span 12; }
+/* min-width: 0 overrides the grid item's default min-width: auto, which
+   otherwise takes its minimum from descendants' specified sizes — including
+   the chart's <svg width={px}> — and never lets the column shrink back
+   below whatever pixel width ClicksChart last measured. */
+.panel { background: var(--surface-1); border: 1px solid var(--line); border-radius: 8px; padding: 12px; grid-column: span 12; min-width: 0; }
 .panel h2 { margin: 0 0 8px; font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--text-3); display: flex; justify-content: space-between; font-weight: 600; }
 .panel p { color: var(--text-2); }
 
@@ -85,7 +89,13 @@ main { flex: 1; min-width: 0; display: flex; flex-direction: column; background:
 .legend span, .tip span { display: inline-flex; align-items: center; gap: 6px; }
 .lg { display: inline-block; width: 14px; border-top: 2px solid var(--series-1); }
 .lg-2 { border-top: 2px dashed var(--series-2); }
-.chart-plot { position: relative; height: 200px; }
+/* width: 100% + min-width: 0 make clientWidth follow the panel, not the
+   <svg width={px}> child (a replaced element whose specified width would
+   otherwise set this box's own min-content width — a feedback loop with the
+   ResizeObserver below, which only grows and never shrinks back). overflow:
+   hidden clips the svg during the brief frame before the observer corrects
+   a too-wide measurement, instead of giving .content a horizontal scrollbar. */
+.chart-plot { position: relative; height: 200px; width: 100%; min-width: 0; overflow: hidden; }
 .chart-plot svg { display: block; overflow: visible; }
 .chart-plot .grid { stroke: var(--grid); }
 .chart-plot .axis { fill: var(--text-3); font-size: 11px; }
