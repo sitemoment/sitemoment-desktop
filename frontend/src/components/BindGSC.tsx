@@ -4,7 +4,7 @@ import { api, errText, type Cancellable } from "../api";
 import { guessProperty } from "../format";
 import type { Connection, Property, Site } from "../types";
 
-export function BindGSC({ site, onBound }: { site: Site; onBound: () => void }) {
+export function BindGSC({ site, onBound, children }: { site: Site; onBound: () => void; children?: React.ReactNode }) {
   const [configured, setConfigured] = useState(true);
   const [conns, setConns] = useState<Connection[]>([]);
   const [account, setAccount] = useState("");
@@ -88,6 +88,7 @@ export function BindGSC({ site, onBound }: { site: Site; onBound: () => void }) 
         )}
         {err && <p className="error">{err}</p>}
       </section>
+      {children}
     </div>
   );
 }
