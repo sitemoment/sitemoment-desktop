@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sitemoment/sitemoment-desktop/internal/bing"
 	"github.com/sitemoment/sitemoment-desktop/internal/google"
 	"github.com/sitemoment/sitemoment-desktop/internal/gscsync"
 	"github.com/sitemoment/sitemoment-desktop/internal/store"
@@ -550,8 +551,21 @@ func TestRunBackfillLoopResyncsOnlySitesWithBackfillLeft(t *testing.T) {
 	if n := src.count(siteA.ID); n != 1 {
 		t.Fatalf("siteA was resynced %d times while paused, want 1", n)
 	}
+	// Unpausing itself resyncs every bound site right away (its own
+	// behavior, tested separately in TestPausedBlocksSyncAndPersists);
+	// drain those two before looking at what the backfill loop does.
 	if err := s.SetPaused(false); err != nil {
 		t.Fatal(err)
+	}
+	for i := 0; i < 2; i++ {
+		select {
+		case <-finished:
+		case <-time.After(2 * time.Second):
+			t.Fatal("the unpause resync did not finish")
+		}
+	}
+	if src.count(siteA.ID) != 2 || src.count(siteB.ID) != 2 {
+		t.Fatalf("after unpausing, calls = %d, %d, want 2, 2", src.count(siteA.ID), src.count(siteB.ID))
 	}
 
 	bctx, cancel := context.WithCancel(context.Background())
@@ -567,7 +581,307 @@ func TestRunBackfillLoopResyncsOnlySitesWithBackfillLeft(t *testing.T) {
 		t.Fatal("backfill loop never resynced the site with backfill left")
 	}
 	cancel()
-	if n := src.count(siteB.ID); n != 1 {
-		t.Fatalf("siteB (no backfill left) was resynced %d times, want 1", n)
+	if n := src.count(siteB.ID); n != 2 {
+		t.Fatalf("siteB (no backfill left) was resynced %d times after unpausing, want 2 (unpause only)", n)
+	}
+	if n := src.count(siteA.ID); n < 3 {
+		t.Fatalf("siteA was resynced %d times, want >= 3 (unpause + at least one backfill tick)", n)
+	}
+}
+
+// holdingSource is a Source whose Sync blocks until release is closed (or
+// ctx ends), signaling entered once it starts.
+type holdingSource struct {
+	name    string
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (h *holdingSource) Name() string          { return h.name }
+func (h *holdingSource) Bound(store.Site) bool { return true }
+func (h *holdingSource) Sync(ctx context.Context, _ store.Site) (gscsync.Result, error) {
+	select {
+	case h.entered <- struct{}{}:
+	default:
+	}
+	select {
+	case <-h.release:
+		return gscsync.Result{}, nil
+	case <-ctx.Done():
+		return gscsync.Result{}, ctx.Err()
+	}
+}
+
+// TestStopWhileWaitingForASlot is the regression test for a run that never
+// even got to start real work: Stop must still settle it to "stopped"
+// (not leave it stuck "running" forever) and clean up its cancel/again
+// bookkeeping, and the site must be syncable again afterwards.
+func TestStopWhileWaitingForASlot(t *testing.T) {
+	st := openStore(t)
+	siteA, err := st.AddSite(ctx, "slot-a.example.com", time.Now().Unix())
+	if err != nil {
+		t.Fatal(err)
+	}
+	siteB, err := st.AddSite(ctx, "slot-b.example.com", time.Now().Unix())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	hold := &holdingSource{name: "gsc", entered: make(chan struct{}, 1), release: make(chan struct{})}
+	finished := make(chan SyncStatus, 10)
+	s := &SyncService{Sources: []Source{hold}, Store: st, Concurrency: 1, Emit: func(name string, data any) {
+		if st, ok := data.(SyncStatus); ok && st.State != "running" {
+			finished <- st
+		}
+	}}
+
+	s.SyncNow(siteA.ID)
+	select {
+	case <-hold.entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("siteA did not start")
+	}
+	s.SyncNow(siteB.ID) // queued: Concurrency is 1 and siteA holds the only slot
+	time.Sleep(20 * time.Millisecond)
+	s.Stop(siteB.ID) // must settle siteB even though it never got a slot
+
+	select {
+	case got := <-finished:
+		if got.SiteID != siteB.ID || got.State != "stopped" {
+			t.Fatalf("got %+v, want siteB stopped", got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("siteB never settled after Stop while waiting for a slot")
+	}
+
+	close(hold.release) // let siteA finish
+	select {
+	case got := <-finished:
+		if got.SiteID != siteA.ID {
+			t.Fatalf("got %+v, want siteA", got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("siteA never finished")
+	}
+
+	for _, st := range s.Statuses() {
+		if st.SiteID == siteB.ID && st.State == "running" {
+			t.Fatal("siteB is stuck running")
+		}
+	}
+	s.mu.Lock()
+	_, hasCancel := s.cancel[siteB.ID]
+	_, hasAgain := s.again[siteB.ID]
+	s.mu.Unlock()
+	if hasCancel || hasAgain {
+		t.Fatalf("siteB leaked bookkeeping: cancel entry present=%v, again present=%v", hasCancel, hasAgain)
+	}
+
+	// The site must not be stuck: a later SyncNow works normally.
+	s.SyncNow(siteB.ID)
+	select {
+	case got := <-finished:
+		if got.SiteID != siteB.ID {
+			t.Fatalf("got %+v, want siteB", got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("siteB could not be synced again after being stopped while queued")
+	}
+}
+
+// TestSetPausedCancelsARunningSync checks that SetPaused(true) cancels a
+// sync already in flight, settling it to "stopped" rather than leaving it
+// running until it happens to finish on its own.
+func TestSetPausedCancelsARunningSync(t *testing.T) {
+	siteID, st := bindSite(t, "pause-cancel.example.com")
+	hold := &holdingSource{name: "gsc", entered: make(chan struct{}, 1), release: make(chan struct{})}
+	finished := make(chan SyncStatus, 4)
+	s := &SyncService{Sources: []Source{hold}, Store: st, Emit: func(name string, data any) {
+		if st, ok := data.(SyncStatus); ok && st.State != "running" {
+			finished <- st
+		}
+	}}
+	s.SyncNow(siteID)
+	select {
+	case <-hold.entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("run did not start")
+	}
+
+	if err := s.SetPaused(true); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case got := <-finished:
+		if got.State != "stopped" {
+			t.Fatalf("state = %q, want %q", got.State, "stopped")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("SetPaused(true) did not cancel the running sync")
+	}
+}
+
+// TestRunRechecksPausedAfterAcquiringSlot checks that a run re-checks
+// Paused() right after acquiring its concurrency slot, settling to
+// "stopped" instead of doing real work — covering the TOCTOU gap between
+// SyncNow registering a run and it actually getting a slot, which a plain
+// "was my context canceled" check cannot catch on its own.
+func TestRunRechecksPausedAfterAcquiringSlot(t *testing.T) {
+	st := openStore(t)
+	siteA, err := st.AddSite(ctx, "recheck-a.example.com", time.Now().Unix())
+	if err != nil {
+		t.Fatal(err)
+	}
+	siteB, err := st.AddSite(ctx, "recheck-b.example.com", time.Now().Unix())
+	if err != nil {
+		t.Fatal(err)
+	}
+	hold := &holdingSource{name: "gsc", entered: make(chan struct{}, 1), release: make(chan struct{})}
+	finished := make(chan SyncStatus, 10)
+	s := &SyncService{Sources: []Source{hold}, Store: st, Concurrency: 1, Emit: func(name string, data any) {
+		if st, ok := data.(SyncStatus); ok && st.State != "running" {
+			finished <- st
+		}
+	}}
+
+	s.SyncNow(siteA.ID)
+	select {
+	case <-hold.entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("siteA did not start")
+	}
+	s.SyncNow(siteB.ID) // queued, waiting for siteA's slot
+	time.Sleep(20 * time.Millisecond)
+
+	// Flip Paused() to true directly, without canceling any context — the
+	// TOCTOU gap SetPaused's own cancel-everything cannot close on its
+	// own, since siteB's cancel func already existed when this happens in
+	// a real race.
+	s.mu.Lock()
+	s.paused, s.pausedLoaded = true, true
+	s.mu.Unlock()
+
+	close(hold.release) // siteA finishes normally and frees the slot
+	var gotA, gotB SyncStatus
+	for i := 0; i < 2; i++ {
+		select {
+		case got := <-finished:
+			if got.SiteID == siteA.ID {
+				gotA = got
+			} else {
+				gotB = got
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("did not see both sites settle")
+		}
+	}
+	if gotA.State != "done" {
+		t.Fatalf("siteA = %+v, want done", gotA)
+	}
+	if gotB.State != "stopped" {
+		t.Fatalf("siteB = %+v, want stopped (paused was true when it got the slot)", gotB)
+	}
+}
+
+// TestFinishDoesNotWipeANewerRunsBookkeeping is a focused, deterministic
+// check of finish's ownership guard: an old run's finish, arriving after a
+// newer run has already taken over the same site's slot, must not delete
+// the newer run's cancel entry or consume its "again" flag.
+func TestFinishDoesNotWipeANewerRunsBookkeeping(t *testing.T) {
+	st := openStore(t)
+	site, err := st.AddSite(ctx, "finish-token.example.com", time.Now().Unix())
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := &SyncService{Store: st}
+
+	newerCancelCalled := false
+	s.mu.Lock()
+	s.tokenSeq = 2
+	s.cancel = map[int64]context.CancelFunc{site.ID: func() { newerCancelCalled = true }}
+	s.cancelTok = map[int64]int64{site.ID: 2}
+	s.again = map[int64]bool{site.ID: true} // meant for the newer run (token 2)
+	s.mu.Unlock()
+
+	// The old run (token 1) finishes.
+	s.finish(site.ID, 1, SyncStatus{SiteID: site.ID, State: "done", At: time.Now().Unix()}, nil, nil, false)
+
+	s.mu.Lock()
+	_, stillThere := s.cancel[site.ID]
+	tok := s.cancelTok[site.ID]
+	again := s.again[site.ID]
+	s.mu.Unlock()
+	if !stillThere || tok != 2 {
+		t.Fatal("the old run (token 1) deleted or altered the newer run's (token 2) cancel entry")
+	}
+	if !again {
+		t.Fatal("the old run consumed the newer run's \"again\" flag")
+	}
+	if newerCancelCalled {
+		t.Fatal("the old run called the newer run's cancel func")
+	}
+}
+
+// TestBackfillLeftPreservedOnFailure checks that a run which fails before
+// it can trust its Remaining count (a non-rate-limit error) does not reset
+// backfillLeft to false, so RunBackfillLoop still retries the site later.
+func TestBackfillLeftPreservedOnFailure(t *testing.T) {
+	st := openStore(t)
+	site, err := st.AddSite(ctx, "preserve-backfill.example.com", time.Now().Unix())
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := &fakeSource{name: "gsc", bound: true, res: gscsync.Result{Requests: 1, Remaining: 5}}
+	finished := make(chan SyncStatus, 10)
+	s := &SyncService{Sources: []Source{src}, Store: st, Emit: func(name string, data any) {
+		if st, ok := data.(SyncStatus); ok && st.State != "running" {
+			finished <- st
+		}
+	}}
+
+	s.SyncNow(site.ID)
+	<-finished
+	s.mu.Lock()
+	left := s.backfillLeft[site.ID]
+	s.mu.Unlock()
+	if !left {
+		t.Fatal("backfillLeft was not set after a clean run with Remaining > 0")
+	}
+
+	// A failing run (not a rate limit) must not silently reset it to false,
+	// even though this run's own (untrustworthy) Remaining would say 0.
+	src.err = errors.New("boom")
+	src.res = gscsync.Result{}
+	s.SyncNow(site.ID)
+	<-finished
+	s.mu.Lock()
+	left = s.backfillLeft[site.ID]
+	s.mu.Unlock()
+	if !left {
+		t.Fatal("a failing run reset backfillLeft to false")
+	}
+}
+
+// TestSourceErrorsAreIsolatedPerSource checks that one source's failure
+// (Bing) is recorded only for that source, not for others (GSC) that
+// succeeded in the same run.
+func TestSourceErrorsAreIsolatedPerSource(t *testing.T) {
+	siteID, st := bindSite(t, "iso.example.com")
+	gscSrc := &fakeSource{name: "gsc", bound: true, res: gscsync.Result{Requests: 1}}
+	bingSrc := &fakeSource{name: "bing", bound: true, err: bing.ErrThrottled}
+	finished := make(chan SyncStatus, 4)
+	s := &SyncService{Sources: []Source{gscSrc, bingSrc}, Store: st, Emit: func(name string, data any) {
+		if st, ok := data.(SyncStatus); ok && st.State != "running" {
+			finished <- st
+		}
+	}}
+
+	s.SyncNow(siteID)
+	<-finished
+	if msg := s.sourceError(siteID, "gsc"); msg != "" {
+		t.Fatalf("gsc error = %q, want \"\" (only bing failed)", msg)
+	}
+	if msg := s.sourceError(siteID, "bing"); msg == "" {
+		t.Fatal("bing error = \"\", want bing's failure recorded")
 	}
 }

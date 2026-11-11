@@ -75,6 +75,76 @@ func TestProgressGSCBackfillingThenDone(t *testing.T) {
 	}
 }
 
+// TestProgressDoesNotFlipToBackfillingForRecentLag checks that a site
+// fully covered everywhere except the newest couple of days (the normal
+// day-by-day lag of a caught-up site: a tail refresh not due yet, or
+// Search Console not having finalized today's data) still shows 已完成,
+// not 回填中 — only a gap older than the recent window counts as a real
+// backfill shortfall.
+func TestProgressDoesNotFlipToBackfillingForRecentLag(t *testing.T) {
+	siteID, st := bindSite(t, "recent-lag.example.com")
+	s := &SyncService{Store: st}
+
+	now := time.Now()
+	through := gscsync.Through(now)
+	from := through.AddDate(0, -progressMonths, 0)
+	// Cover everything except the newest day of each slice.
+	laggingThrough := through.AddDate(0, 0, -1)
+	fromStr, laggingThroughStr := from.Format(store.DayLayout), laggingThrough.Format(store.DayLayout)
+	for _, sl := range gscsync.Slices {
+		if err := st.ReplaceGSC(ctx, siteID, sl.Name, fromStr, laggingThroughStr, nil, now.Unix()); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	rows, err := s.Progress(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gsc := findSource(t, rows[0], "gsc")
+	if gsc.State != stateDone {
+		t.Fatalf("state = %q, want %q (missing only the newest day, within the recent window)", gsc.State, stateDone)
+	}
+	for _, sl := range gsc.Slices {
+		if sl.State != stateDone {
+			t.Fatalf("slice %+v, want state %q", sl, stateDone)
+		}
+	}
+}
+
+// TestProgressNextBackfillAtUsesTheLoopsOwnSchedule checks that a
+// backfilling source's NextBackfillAt comes from RunBackfillLoop's own
+// tracked next-tick time, not status.At plus a fixed offset (which could
+// be stale or just wrong if the run finished long before the loop's next
+// real tick).
+func TestProgressNextBackfillAtUsesTheLoopsOwnSchedule(t *testing.T) {
+	siteID, st := bindSite(t, "next-backfill.example.com")
+	s := &SyncService{Store: st}
+
+	// A status.At far in the past: status.At + backfillLoopInterval would
+	// give a very different (and, for a stale status, even past) answer
+	// than the loop's own schedule.
+	old := time.Now().Add(-24 * time.Hour).Unix()
+	s.setStatus(SyncStatus{SiteID: siteID, State: "done", At: old})
+	s.mu.Lock()
+	s.backfillLeft = map[int64]bool{siteID: true}
+	want := time.Now().Add(37 * time.Minute).Unix()
+	s.nextBackfillAt = want
+	s.mu.Unlock()
+
+	rows, err := s.Progress(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gsc := findSource(t, rows[0], "gsc")
+	if gsc.State != stateBackfilling {
+		t.Fatalf("state = %q, want %q", gsc.State, stateBackfilling)
+	}
+	if gsc.NextBackfillAt != want {
+		t.Fatalf("NextBackfillAt = %d, want %d (the loop's own schedule, not status.At + an offset)", gsc.NextBackfillAt, want)
+	}
+}
+
 // TestProgressStatesFollowRunFlags checks that Progress reflects paused,
 // then a run in progress, then a failed run's error, in that priority
 // order, for a GA4-bound site.
@@ -113,12 +183,15 @@ func TestProgressStatesFollowRunFlags(t *testing.T) {
 	}
 
 	s.setStatus(SyncStatus{SiteID: site.ID, State: "failed", Error: "GA4：没有权限", At: time.Now().Unix()})
+	s.mu.Lock()
+	s.sourceErr = map[int64]map[string]string{site.ID: {"ga": "没有权限"}}
+	s.mu.Unlock()
 	rows, err = s.Progress(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
 	ga := findSource(t, rows[0], "ga")
-	if ga.State != stateFailedLabel || ga.Error != "GA4：没有权限" {
+	if ga.State != stateFailedLabel || ga.Error != "没有权限" {
 		t.Fatalf("failed: %+v", ga)
 	}
 	_ = gasync.Slices // documents which slices ga.Slices should enumerate

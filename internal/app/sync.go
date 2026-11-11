@@ -57,7 +57,7 @@ var sourceLabels = map[string]string{"gsc": "Search Console", "ga": "GA4", "bing
 // SyncStatus is the latest sync state of a site, sent as event "sync:status".
 type SyncStatus struct {
 	SiteID   int64  `json:"siteId"`
-	State    string `json:"state"` // running | done | failed
+	State    string `json:"state"` // running | done | failed | stopped
 	Error    string `json:"error,omitempty"`
 	Requests int    `json:"requests"`
 	At       int64  `json:"at"`
@@ -73,11 +73,11 @@ const defaultConcurrency = 2
 const defaultRetryAfterRateLimit = 5 * time.Minute
 
 // backfillLoopInterval is how often RunBackfillLoop re-triggers sites whose
-// Search Console history is not fully caught up yet (see gscsync's
-// recentDays/backfillBatch): often enough to finish in a reasonable time,
-// rare enough to stay well under Google's rate limits. Not a setting (it
-// is never read from or written to the settings table) — a var only so
-// tests can shorten it; production code never changes it.
+// Search Console or GA4 history is not fully caught up yet (see gscsync's
+// and gasync's RecentDays/BackfillBatch): often enough to finish in a
+// reasonable time, rare enough to stay well under Google's rate limits.
+// Not a setting (it is never read from or written to the settings table)
+// — a var only so tests can shorten it; production code never changes it.
 var backfillLoopInterval = 15 * time.Minute
 
 // pausedSettingKey is the settings-table key for the global "pause every
@@ -102,8 +102,9 @@ type SyncService struct {
 	// RetryAfterRateLimit is how long to wait before automatically retrying
 	// a rate-limited site. 0: defaultRetryAfterRateLimit.
 	RetryAfterRateLimit time.Duration
-	// After runs once a site's sync has finished (done or failed), in the
-	// sync's goroutine: main.go evaluates the site's tasks there.
+	// After runs once a site's sync has finished (done or failed, not
+	// stopped), in the sync's goroutine: main.go evaluates the site's
+	// tasks there.
 	After func(siteID int64)
 
 	mu       sync.Mutex
@@ -111,16 +112,37 @@ type SyncService struct {
 	sem      chan struct{}
 	retrying map[int64]bool
 	again    map[int64]bool
-	// cancel holds each site's currently running sync's cancel func, so
-	// Stop can end it. retryCancel is the same for a pending scheduleRetry
-	// timer. backfillLeft marks sites whose last run reported Search
-	// Console history still not fully caught up (gscsync.Result.Remaining
-	// > 0), for RunBackfillLoop to pick up again.
-	cancel       map[int64]context.CancelFunc
-	retryCancel  map[int64]context.CancelFunc
+	// tokenSeq assigns each run a unique, increasing token: cancel/cancelTok
+	// let a run's own cleanup tell whether it still "owns" siteID's slot
+	// (nothing newer has started), so it never wipes a different run's
+	// bookkeeping (see finish).
+	tokenSeq  int64
+	cancel    map[int64]context.CancelFunc
+	cancelTok map[int64]int64
+	// retryCancel is the cancel func for a pending scheduleRetry timer.
+	retryCancel map[int64]context.CancelFunc
+	// backfillLeft marks sites whose last fully-completed run reported
+	// Search Console or GA4 history still not fully caught up
+	// (gscsync/gasync Result.Remaining > 0), for RunBackfillLoop to pick up
+	// again. A run that was stopped, or that failed outright, leaves this
+	// alone (see finish) rather than resetting it to false.
 	backfillLeft map[int64]bool
-	paused       bool
-	pausedLoaded bool
+	// skipBackfill marks a site Stop was just called on: RunBackfillLoop
+	// leaves it alone until a fresh SyncNow (manual, or RunSyncLoop's next
+	// tick) clears the flag — a user's Stop should not be silently undone
+	// by the backfill loop a few minutes later.
+	skipBackfill map[int64]bool
+	// sourceErr is the last error per (site, source); a source that is not
+	// present, or whose value is "", is not currently failing. Sources not
+	// attempted in a given run keep their previous entry untouched, so one
+	// source's failure (e.g. Bing) never marks another (e.g. GSC) failed.
+	sourceErr map[int64]map[string]string
+	// nextBackfillAt is when RunBackfillLoop will next check for sites to
+	// resync (unix seconds), kept current by RunBackfillLoop itself; 0
+	// before it has ever ticked.
+	nextBackfillAt int64
+	paused         bool
+	pausedLoaded   bool
 }
 
 func (s *SyncService) context() context.Context {
@@ -144,6 +166,9 @@ func (s *SyncService) semaphore() chan struct{} {
 	return s.sem
 }
 
+// setStatus records and emits st directly, without touching any of a
+// run's other bookkeeping (cancel, again, backfillLeft...). Used by tests
+// to simulate a site's state; production code goes through finish.
 func (s *SyncService) setStatus(st SyncStatus) {
 	s.mu.Lock()
 	if s.status == nil {
@@ -177,25 +202,34 @@ func (s *SyncService) SyncNow(siteID int64) {
 		s.mu.Unlock()
 		return
 	}
+	s.tokenSeq++
+	token := s.tokenSeq
 	st := SyncStatus{SiteID: siteID, State: "running", At: time.Now().Unix()}
 	s.status[siteID] = st
 	runCtx, cancel := context.WithCancel(s.context())
 	if s.cancel == nil {
 		s.cancel = map[int64]context.CancelFunc{}
 	}
+	if s.cancelTok == nil {
+		s.cancelTok = map[int64]int64{}
+	}
 	s.cancel[siteID] = cancel
+	s.cancelTok[siteID] = token
+	// A fresh run supersedes any earlier Stop: let the backfill loop
+	// consider this site again once this run (or a later one) finishes.
+	delete(s.skipBackfill, siteID)
 	s.mu.Unlock()
 
 	if s.Emit != nil {
 		s.Emit("sync:status", st)
 	}
-	go s.run(runCtx, cancel, siteID)
+	go s.run(runCtx, cancel, token, siteID)
 }
 
 // Stop cancels siteID's currently running sync, if any, and drops any
-// pending automatic retry for it. The run's status settles to "failed"
-// (its context is canceled) once its goroutine notices; call SyncNow
-// afterwards to start over.
+// pending automatic retry for it. The run's status settles to "stopped"
+// once its goroutine notices; call SyncNow afterwards to start over. Until
+// then, RunBackfillLoop leaves the site alone (see skipBackfill).
 func (s *SyncService) Stop(siteID int64) {
 	s.mu.Lock()
 	if cancel, ok := s.cancel[siteID]; ok {
@@ -209,8 +243,10 @@ func (s *SyncService) Stop(siteID int64) {
 }
 
 // SetPaused turns every sync (manual and automatic) on or off, persisting
-// the choice so it survives a restart. Pausing does not stop a run already
-// in flight; call Stop for that.
+// the choice so it survives a restart. Pausing cancels every run (and
+// pending retry) currently in flight, the same as calling Stop on each of
+// them; unpausing immediately syncs every bound site, mirroring
+// RunSyncLoop's on-launch pass, instead of waiting for the next tick.
 func (s *SyncService) SetPaused(paused bool) error {
 	v := ""
 	if paused {
@@ -221,17 +257,42 @@ func (s *SyncService) SetPaused(paused bool) error {
 	}
 	s.mu.Lock()
 	s.paused, s.pausedLoaded = paused, true
+	var cancels []context.CancelFunc
+	if paused {
+		for _, c := range s.cancel {
+			cancels = append(cancels, c)
+		}
+		for _, c := range s.retryCancel {
+			cancels = append(cancels, c)
+		}
+	}
 	s.mu.Unlock()
+	for _, c := range cancels {
+		c()
+	}
+
 	if s.Emit != nil {
 		s.Emit("sync:paused", paused)
+	}
+	if !paused {
+		if sites, err := s.Store.Sites(s.context()); err != nil {
+			log.Printf("app: list sites to resume after unpausing: %v", err)
+		} else {
+			for _, site := range sites {
+				if s.anyBound(site) {
+					s.SyncNow(site.ID)
+				}
+			}
+		}
 	}
 	return nil
 }
 
 // Paused reports whether syncing is currently paused, loading the setting
-// from the store on first use (and on every call while that lookup keeps
-// failing, so a storage error never permanently freezes the in-memory
-// value at a stale answer).
+// from the store on first use. It fails closed: if that lookup errors, it
+// reports paused (and logs) rather than risk syncing — and retries the
+// lookup on every call until one succeeds, rather than caching the
+// pessimistic answer forever.
 func (s *SyncService) Paused() bool {
 	s.mu.Lock()
 	if s.pausedLoaded {
@@ -242,7 +303,8 @@ func (s *SyncService) Paused() bool {
 
 	v, err := s.Store.Setting(s.context(), pausedSettingKey)
 	if err != nil {
-		return false
+		log.Printf("app: read the sync.paused setting: %v (treating as paused)", err)
+		return true
 	}
 	paused := v == "1"
 	s.mu.Lock()
@@ -262,24 +324,53 @@ func (s *SyncService) Statuses() []SyncStatus {
 	return out
 }
 
+// sourceError is the last known error for (siteID, source), or "" if it is
+// not currently failing (never attempted, or its last attempt succeeded).
+func (s *SyncService) sourceError(siteID int64, source string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.sourceErr[siteID][source]
+}
+
+// stoppedStatus is the SyncStatus for a run that ends without having
+// synced anything, because it was stopped (or the app is quitting) before
+// or just after it got a chance to start real work.
+func stoppedStatus(siteID int64) SyncStatus {
+	return SyncStatus{SiteID: siteID, State: "stopped", At: time.Now().Unix()}
+}
+
 // run syncs one source after another for siteID, once each (a source whose
-// Result.Remaining is still > 0 after that — typically gscsync's gradual
-// Search Console backfill — is picked up again by RunBackfillLoop or the
+// Result.Remaining is still > 0 after that — typically gscsync's or
+// gasync's gradual backfill — is picked up again by RunBackfillLoop or the
 // next RunSyncLoop tick, not immediately re-run here: that is what keeps a
 // first big backfill from blocking for minutes in one call). cancel is
 // SyncNow's per-run context.CancelFunc, released here so Stop never leaks
-// it.
-func (s *SyncService) run(ctx context.Context, cancel context.CancelFunc, siteID int64) {
+// it. token identifies this run for finish's ownership check.
+func (s *SyncService) run(ctx context.Context, cancel context.CancelFunc, token, siteID int64) {
 	defer cancel()
 	sem := s.semaphore()
 	select {
 	case sem <- struct{}{}:
 	case <-ctx.Done():
+		// Stopped (or paused, or shutting down) while still waiting for a
+		// concurrency slot: settle the status and release the slot/again
+		// bookkeeping now — nothing here must leave the site stuck
+		// "running" forever.
+		s.finish(siteID, token, stoppedStatus(siteID), nil, nil, false)
+		return
+	}
+	// A long wait for a slot can straddle a Stop or a SetPaused(true) that
+	// landed between SyncNow registering this run and it actually getting
+	// to run: re-check before doing any real work.
+	if ctx.Err() != nil || s.Paused() {
+		<-sem
+		s.finish(siteID, token, stoppedStatus(siteID), nil, nil, false)
 		return
 	}
 
 	total, remaining, retry := 0, 0, false
 	var problems []string
+	sourceErrs := map[string]string{}
 	site, err := s.Store.Site(ctx, siteID)
 	if err != nil {
 		problems = append(problems, syncMessage(err))
@@ -295,8 +386,11 @@ func (s *SyncService) run(ctx context.Context, cancel context.CancelFunc, siteID
 		total += res.Requests
 		remaining += res.Remaining
 		if serr != nil {
-			problems = append(problems, sourceLabels[src.Name()]+"："+syncMessage(serr))
+			sourceErrs[src.Name()] = syncMessage(serr)
+			problems = append(problems, sourceLabels[src.Name()]+"："+sourceErrs[src.Name()])
 			retry = retry || errors.Is(serr, google.ErrRateLimited) || errors.Is(serr, bing.ErrThrottled)
+		} else {
+			sourceErrs[src.Name()] = ""
 		}
 	}
 	<-sem
@@ -308,25 +402,75 @@ func (s *SyncService) run(ctx context.Context, cancel context.CancelFunc, siteID
 	case len(problems) > 0:
 		st.State, st.Error = "failed", strings.Join(problems, "；")
 	}
-	s.setStatus(st)
-	if s.After != nil && ctx.Err() == nil {
+	// Only a clean, uninterrupted run's Remaining is trustworthy: a run
+	// stopped partway through, or one where a source errored before it
+	// could report Remaining, must not reset backfillLeft to "done" just
+	// because this run happened not to see any remaining work.
+	var backfillKnown *bool
+	if ctx.Err() == nil && len(problems) == 0 {
+		v := remaining > 0
+		backfillKnown = &v
+	}
+	s.finish(siteID, token, st, sourceErrs, backfillKnown, retry)
+}
+
+// finish atomically settles siteID's run (token) status, per-source
+// errors and (when known) backfillLeft, and — only if this run still owns
+// siteID's slot, i.e. nothing newer has superseded it — its cancel/again
+// bookkeeping (and, for a stopped run, marks it to be skipped by
+// RunBackfillLoop until the next fresh SyncNow). Emit, After and chaining
+// another run happen outside the lock.
+func (s *SyncService) finish(siteID, token int64, st SyncStatus, sourceErrs map[string]string, backfillKnown *bool, retry bool) {
+	s.mu.Lock()
+	owns := s.cancelTok[siteID] == token
+	if owns {
+		delete(s.cancel, siteID)
+		delete(s.cancelTok, siteID)
+	}
+	if s.status == nil {
+		s.status = map[int64]SyncStatus{}
+	}
+	s.status[siteID] = st
+	if backfillKnown != nil {
+		if s.backfillLeft == nil {
+			s.backfillLeft = map[int64]bool{}
+		}
+		s.backfillLeft[siteID] = *backfillKnown
+	}
+	if len(sourceErrs) > 0 {
+		if s.sourceErr == nil {
+			s.sourceErr = map[int64]map[string]string{}
+		}
+		if s.sourceErr[siteID] == nil {
+			s.sourceErr[siteID] = map[string]string{}
+		}
+		for name, msg := range sourceErrs {
+			s.sourceErr[siteID][name] = msg
+		}
+	}
+	var again bool
+	if owns {
+		again = s.again[siteID]
+		delete(s.again, siteID)
+		if st.State == "stopped" {
+			if s.skipBackfill == nil {
+				s.skipBackfill = map[int64]bool{}
+			}
+			s.skipBackfill[siteID] = true
+		}
+	}
+	s.mu.Unlock()
+
+	if s.Emit != nil {
+		s.Emit("sync:status", st)
+	}
+	if s.After != nil && st.State != "stopped" {
 		s.After(siteID)
 	}
-
-	s.mu.Lock()
-	if s.backfillLeft == nil {
-		s.backfillLeft = map[int64]bool{}
-	}
-	s.backfillLeft[siteID] = remaining > 0
-	if s.cancel != nil {
-		delete(s.cancel, siteID)
-	}
-	again := s.again[siteID]
-	delete(s.again, siteID)
-	s.mu.Unlock()
 	switch {
-	case ctx.Err() != nil:
-		// Stopped (or the app is quitting): never auto-chain or auto-retry.
+	case st.State == "stopped":
+		// Never auto-chain or auto-retry a run the user (or shutdown, or
+		// a pause) stopped; see skipBackfill above for the backfill loop.
 	case again:
 		s.SyncNow(siteID)
 	case retry:
@@ -439,35 +583,50 @@ func RunSyncLoop(ctx context.Context, s *SyncService, every time.Duration) {
 	}
 }
 
-// sitesNeedingBackfill lists the sites whose last run reported Search
-// Console history not yet fully caught up (gscsync.Result.Remaining > 0).
+// sitesNeedingBackfill lists the sites whose last fully-completed run
+// reported history not yet fully caught up (backfillLeft), excluding any
+// just Stopped (skipBackfill) until a fresh SyncNow clears that.
 func (s *SyncService) sitesNeedingBackfill() []int64 {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var out []int64
 	for id, left := range s.backfillLeft {
-		if left {
+		if left && !s.skipBackfill[id] {
 			out = append(out, id)
 		}
 	}
 	return out
 }
 
+// NextBackfillAt is when RunBackfillLoop will next check for sites to
+// resync (unix seconds), or 0 if it has not ticked yet.
+func (s *SyncService) NextBackfillAt() int64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.nextBackfillAt
+}
+
 // RunBackfillLoop re-syncs, every backfillLoopInterval until ctx ends, only
-// the sites whose Search Console history is not fully caught up yet: a big
-// first backfill proceeds in small batches (see gscsync's
-// recentDays/backfillBatch) spaced well apart, instead of blocking. It does
-// nothing while paused, and sites with nothing left to backfill are not
-// touched (so it never makes pointless requests once a site is caught up).
+// the sites whose history is not fully caught up yet: a big first backfill
+// proceeds in small batches (see gscsync's and gasync's
+// RecentDays/BackfillBatch) spaced well apart, instead of blocking. It does
+// nothing while paused, and sites with nothing left to backfill (or just
+// Stopped) are not touched.
 func RunBackfillLoop(ctx context.Context, s *SyncService) {
 	t := time.NewTicker(backfillLoopInterval)
 	defer t.Stop()
+	s.mu.Lock()
+	s.nextBackfillAt = time.Now().Add(backfillLoopInterval).Unix()
+	s.mu.Unlock()
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-t.C:
 		}
+		s.mu.Lock()
+		s.nextBackfillAt = time.Now().Add(backfillLoopInterval).Unix()
+		s.mu.Unlock()
 		if s.Paused() {
 			continue
 		}
