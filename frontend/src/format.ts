@@ -1,4 +1,4 @@
-import type { BingSite, GAProperty, KeywordKind, Metric, Property, RunView } from "./types";
+import type { BingSite, GAProperty, KeywordKind, Metric, Outcome, Property, RunView, TaskStatus } from "./types";
 
 export const fmtInt = (n: number) => Math.round(n).toLocaleString("en-US");
 
@@ -113,4 +113,46 @@ export function guessBingSite(sites: BingSite[], host: string): string {
 export function nextHumanRun(cur: RunView | null, run: RunView): RunView | null {
   if (run.status === "need_human") return run;
   return cur && cur.id === run.id ? null : cur;
+}
+
+/** Local date and time, e.g. "11-10 08:00". */
+export function fmtDateTime(unix: number): string {
+  const d = new Date(unix * 1000);
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+/** Local date, e.g. "2026-11-10". */
+export function fmtDate(unix: number): string {
+  const d = new Date(unix * 1000);
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+/** good / warn / bad for a health score: any P0 is bad, below 85 needs attention (mockup 2). */
+export function healthState(h: { score: number; p0: number }): "good" | "warn" | "bad" {
+  if (h.p0 > 0) return "bad";
+  return h.score < 85 ? "warn" : "good";
+}
+
+export const healthIcon = { good: "●", warn: "▲", bad: "■" } as const;
+
+export const taskStatusLabel: Record<TaskStatus, string> = {
+  proposed: "待确认", open: "进行中", passed: "已通过", failed: "未通过", dismissed: "已忽略",
+};
+
+/** An outcome in words: "达标" / "未达标" / "待数据", with the baseline when there is one. */
+export function outcomeText(o: Outcome | undefined): string {
+  if (!o || !o.state) return "待检查";
+  const state = { pass: "达标", unmet: "未达标", pending: "待数据" }[o.state];
+  const from = o.baseline != null && o.current != null ? `（开始前 ${round1(o.baseline)} → 现在 ${round1(o.current)}）` : "";
+  return state + from;
+}
+
+const round1 = (n: number) => String(Math.round(n * 10) / 10);
+
+/** Where a notice ref ("task:3", "report:7", "crawl:2") leads. */
+export function noticeTarget(ref: string): "tasks" | "reports" | "health" | null {
+  const kind = ref.split(":")[0];
+  return kind === "task" ? "tasks" : kind === "report" ? "reports" : kind === "crawl" ? "health" : null;
 }
