@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { api, errText, type Cancellable } from "../api";
 import { guessProperty } from "../format";
 import type { Connection, Property, Site } from "../types";
+import { GoogleAuthLink } from "./GoogleAuthLink";
 
 export function BindGSC({ site, onBound, children }: { site: Site; onBound: () => void; children?: React.ReactNode }) {
   const [configured, setConfigured] = useState(true);
@@ -82,6 +83,7 @@ export function BindGSC({ site, onBound, children }: { site: Site; onBound: () =
           )}
           <button className="btn" onClick={connect} disabled={!configured}>{busy ? "等待浏览器里完成授权…（取消）" : "连接 Google 账号"}</button>
         </div>
+        <GoogleAuthLink active={busy} />
         {account && (
           <div className="row">
             <select value={prop} onChange={(e) => setProp(e.target.value)} disabled={props.length === 0}>

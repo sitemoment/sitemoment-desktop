@@ -66,7 +66,7 @@ func (f *Fetcher) Trace(ctx context.Context, rawURL string) (*Trace, error) {
 	ctx, cancel := context.WithTimeout(ctx, f.cfg.Timeout)
 	defer cancel()
 	client := &http.Client{
-		Transport:     f.transport,
+		Transport:     f.rt,
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 	}
 	t := &Trace{URL: u, Hops: []Hop{}}

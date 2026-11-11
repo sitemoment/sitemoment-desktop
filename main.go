@@ -24,6 +24,7 @@ import (
 	"github.com/sitemoment/sitemoment-desktop/internal/google"
 	"github.com/sitemoment/sitemoment-desktop/internal/gscsync"
 	"github.com/sitemoment/sitemoment-desktop/internal/health"
+	"github.com/sitemoment/sitemoment-desktop/internal/netproxy"
 	"github.com/sitemoment/sitemoment-desktop/internal/paths"
 	"github.com/sitemoment/sitemoment-desktop/internal/rank"
 	"github.com/sitemoment/sitemoment-desktop/internal/secret"
@@ -112,9 +113,15 @@ func main() {
 	}
 
 	secrets := secret.Keyring{Service: "SiteMoment"}
-	httpc := &http.Client{Timeout: 60 * time.Second}
-	streamHTTP := &http.Client{} // model answers stream for minutes; each call has its own context deadline
-	cl := &cloud.Client{Base: env("SITEMOMENT_API", cloudBase), HTTP: httpc, Secrets: secrets}
+	// Every outbound request follows the OS system proxy (Clash/V2Ray's
+	// "set system proxy"), then HTTP(S)_PROXY, then goes direct: an app
+	// started from Finder has no proxy variables, and the webview already
+	// follows the system proxy on its own.
+	proxy := netproxy.New()
+	httpc := proxy.Client(60 * time.Second)
+	streamHTTP := proxy.Client(0) // model answers stream for minutes; each call has its own context deadline
+	apiBase := env("SITEMOMENT_API", cloudBase)
+	cl := &cloud.Client{Base: apiBase, HTTP: httpc, Secrets: secrets}
 	oauth := &google.OAuth{
 		// Set only from env/ldflags; empty means "ask the backend" (owner
 		// decision 2026-11-11: central configuration in the admin console,
@@ -160,7 +167,7 @@ func main() {
 			notifier.Notify(ctx, app.Note{Title: "SiteMoment 有新版本", Body: "v" + v + " 已发布，在设置 → 软件更新里安装。", Kind: "update"})
 		},
 		Quit:     func() { wapp.Quit() },
-		Provider: updates.ProviderConfig{Repo: env("SITEMOMENT_UPDATE_REPO", updates.Repo)},
+		Provider: updates.ProviderConfig{Repo: env("SITEMOMENT_UPDATE_REPO", updates.Repo), HTTP: proxy.Client(10 * time.Minute)},
 	})
 	progress := func(p gscsync.Progress) { emit("sync:progress", p) }
 	syncSvc := &app.SyncService{
@@ -172,7 +179,9 @@ func main() {
 		Store: st, Emit: emit, Ctx: ctx,
 	}
 
-	fetcher := rank.NewFetcher(rank.DefaultFetcherConfig())
+	fetcherConfig := rank.DefaultFetcherConfig()
+	fetcherConfig.Proxy = proxy.Proxy // destinations are still checked first (see rank.Fetcher)
+	fetcher := rank.NewFetcher(fetcherConfig)
 	ops := &app.Ops{
 		Store: st, Emit: emit, Ctx: ctx,
 		Checker: &health.Checker{Store: st, Fetcher: fetcher, Inspector: app.GSCInspector{GSC: gsc, Tokens: tokens}},
@@ -195,16 +204,16 @@ func main() {
 		log.Fatal(err)
 	}
 	runner := &collect.Runner{Store: st, Catalog: catalog, Browser: browser, Emit: emit,
-		Post:       map[string]collect.PostFunc{"google-serp": (&collect.GoogleResolver{}).Post},
+		Post:       map[string]collect.PostFunc{"google-serp": (&collect.GoogleResolver{HTTP: &http.Client{Transport: proxy.Transport()}}).Post},
 		CacheHours: map[string]func(data json.RawMessage) int{"google-serp": googleSerpCacheHours},
 	}
 	windows := &webview.Windows{Browser: browser}
 	browser.New = windows.New
 	ag := agent.New(st, models.Current, &agent.Deps{
 		Fetcher:    fetcher,
-		PSI:        webdata.NewPSI(webdata.DefaultPSIURL, ""),
-		Wayback:    webdata.NewWayback(webdata.DefaultWaybackURL),
-		Suggest:    webdata.NewSuggest(webdata.DefaultSuggestURL),
+		PSI:        webdata.NewPSI(webdata.DefaultPSIURL, "", webdata.WithProxy(proxy.Proxy)),
+		Wayback:    webdata.NewWayback(webdata.DefaultWaybackURL, webdata.WithProxy(proxy.Proxy)),
+		Suggest:    webdata.NewSuggest(webdata.DefaultSuggestURL, webdata.WithProxy(proxy.Proxy)),
 		Collectors: &app.CollectorTools{Catalog: catalog, Runner: runner},
 		Cloud:      cl,
 		Tasks:      ops,
@@ -214,7 +223,7 @@ func main() {
 		Name: "SiteMoment",
 		Services: []application.Service{
 			application.NewService(&app.AccountService{Cloud: cl, Open: open}),
-			application.NewService(&app.GoogleService{OAuth: oauth, GSC: gsc, GA: ga, Tokens: tokens, Store: st, Secrets: secrets, Open: open, Config: googleConfig}),
+			application.NewService(&app.GoogleService{OAuth: oauth, GSC: gsc, GA: ga, Tokens: tokens, Store: st, Secrets: secrets, Open: open, Emit: dispatch, Config: googleConfig}),
 			application.NewService(&app.BingService{Bing: bingc, Store: st, Secrets: secrets}),
 			application.NewService(&app.SiteService{Store: st, Sync: syncSvc.SyncNow}),
 			application.NewService(syncSvc),
@@ -231,6 +240,7 @@ func main() {
 			application.NewService(&app.TaskService{Ops: ops}),
 			application.NewService(&app.ReportService{Ops: ops, Save: save}),
 			application.NewService(&app.NoticeService{Store: st}),
+			application.NewService(&app.NetworkService{Proxy: proxy, Probes: []string{"https://www.google.com/generate_204", apiBase + "/healthz"}}),
 		},
 		// The middleware serves collector windows their boot page and keeps
 		// them away from everything else the asset server offers.

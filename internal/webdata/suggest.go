@@ -24,8 +24,8 @@ type Suggest struct {
 }
 
 // NewSuggest builds the client.
-func NewSuggest(baseURL string) *Suggest {
-	return &Suggest{http: newClient(15 * time.Second), baseURL: baseURL, Gap: 400 * time.Millisecond}
+func NewSuggest(baseURL string, opts ...Option) *Suggest {
+	return &Suggest{http: newClient(15*time.Second, opts...), baseURL: baseURL, Gap: 400 * time.Millisecond}
 }
 
 // Complete returns the suggestions for q in language hl and country gl.

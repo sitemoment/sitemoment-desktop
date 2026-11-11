@@ -10,23 +10,35 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"strconv"
 	"time"
 )
 
+// Option configures a client built by NewPSI, NewWayback or NewSuggest.
+type Option func(*http.Transport)
+
+// WithProxy sets the proxy function (the app passes netproxy's, which
+// follows the system proxy); without it proxies come from the environment.
+func WithProxy(proxy func(*http.Request) (*url.URL, error)) Option {
+	return func(t *http.Transport) { t.Proxy = proxy }
+}
+
 // newClient has a 10 s connect timeout and an overall request timeout.
-// Proxies come from the environment, like reqwest's default.
-func newClient(timeout time.Duration) *http.Client {
-	return &http.Client{
-		Timeout: timeout,
-		Transport: &http.Transport{
-			Proxy:               http.ProxyFromEnvironment,
-			DialContext:         (&net.Dialer{Timeout: 10 * time.Second}).DialContext,
-			TLSHandshakeTimeout: 10 * time.Second,
-			MaxIdleConnsPerHost: 4,
-			IdleConnTimeout:     90 * time.Second,
-		},
+// Proxies come from the environment, like reqwest's default, unless an
+// option says otherwise.
+func newClient(timeout time.Duration, opts ...Option) *http.Client {
+	t := &http.Transport{
+		Proxy:               http.ProxyFromEnvironment,
+		DialContext:         (&net.Dialer{Timeout: 10 * time.Second}).DialContext,
+		TLSHandshakeTimeout: 10 * time.Second,
+		MaxIdleConnsPerHost: 4,
+		IdleConnTimeout:     90 * time.Second,
 	}
+	for _, o := range opts {
+		o(t)
+	}
+	return &http.Client{Timeout: timeout, Transport: t}
 }
 
 // truncate keeps at most maxChars characters of s, for embedding upstream

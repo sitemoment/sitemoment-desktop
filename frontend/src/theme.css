@@ -294,6 +294,7 @@ select.chip { padding: 2px 4px; }
 .link { border: 0; background: none; padding: 0; color: var(--text-3); text-decoration: underline; font: inherit; }
 .check { display: flex; gap: 6px; align-items: center; color: var(--text-2); }
 .hint { margin: 8px 0 0; font-size: 12px; color: var(--text-3); }
+.auth-link .input { flex: 1; min-width: 0; font-size: 12px; }
 .notes pre { white-space: pre-wrap; font-family: var(--mono); font-size: 11.5px; color: var(--text-2); max-height: 240px; overflow: auto; user-select: text; }
 .notes summary { cursor: pointer; color: var(--text-2); margin-top: 8px; }
 

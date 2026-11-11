@@ -140,3 +140,12 @@ export interface UpdateStatus {
 // here, so Toasts' kind union is the narrower one actually seen.
 export interface Note { title: string; body: string; kind: "update" | "info" }
 export interface NotifySettings { native: boolean; available: boolean; reason?: string }
+
+// Network proxy (internal/netproxy.Status, app.Probe). The app follows the
+// system proxy; Settings → 网络代理 only shows it and tests the connection.
+export type ProxySource = "system" | "env" | "pac-unsupported" | "direct";
+export interface ProxyStatus {
+  source: ProxySource; httpProxy: string; httpsProxy: string; socks: string;
+  exceptions: string[] | null; pac: string; error: string;
+}
+export interface Probe { url: string; ok: boolean; status: number; ms: number; via: string; error: string }

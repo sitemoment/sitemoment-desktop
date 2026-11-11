@@ -23,8 +23,8 @@ type PSI struct {
 }
 
 // NewPSI builds the client; key may be empty.
-func NewPSI(baseURL, key string) *PSI {
-	return &PSI{http: newClient(90 * time.Second), baseURL: baseURL, key: key}
+func NewPSI(baseURL, key string, opts ...Option) *PSI {
+	return &PSI{http: newClient(90*time.Second, opts...), baseURL: baseURL, key: key}
 }
 
 // FieldMetric is one CrUX metric at the 75th percentile.
