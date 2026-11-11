@@ -53,19 +53,18 @@ func (s *AgentService) Create(ctx context.Context, siteID int64) (agent.SessionV
 	return agent.ViewOf(sess), err
 }
 
-// Delete removes a session that is not answering.
+// Delete removes a session that is not answering. The guard is enforced
+// atomically in the store (DeleteAgentSession), so this can't race a
+// concurrent Start/Resume the way a separate check-then-delete would.
 func (s *AgentService) Delete(ctx context.Context, id int64) error {
-	sess, err := s.Store.AgentSession(ctx, id)
-	if errors.Is(err, store.ErrNotFound) {
+	switch err := s.Store.DeleteAgentSession(ctx, id); {
+	case errors.Is(err, store.ErrNotFound):
 		return nil
-	}
-	if err != nil {
+	case errors.Is(err, store.ErrAgentBusy):
+		return errors.New("这个会话正在回答，请先停止")
+	default:
 		return err
 	}
-	if sess.Status == store.AgentRunning {
-		return errors.New("这个会话正在回答，请先停止")
-	}
-	return s.Store.DeleteAgentSession(ctx, id)
 }
 
 // Transcript is the session's conversation for the panel.

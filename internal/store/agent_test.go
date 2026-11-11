@@ -75,6 +75,28 @@ func TestAgentSessionLifecycle(t *testing.T) {
 	}
 }
 
+func TestDeleteAgentSessionGuardsRunningSessions(t *testing.T) {
+	st := open(t)
+	a, err := st.CreateAgentSession(ctx, 0, "confirm", 1)
+	ok(t, err)
+	_, err = st.ClaimAgentTurn(ctx, a.ID, false, 2)
+	ok(t, err)
+	if err := st.DeleteAgentSession(ctx, a.ID); !errors.Is(err, ErrAgentBusy) {
+		t.Fatalf("delete while running: %v", err)
+	}
+	if _, err := st.AgentSession(ctx, a.ID); err != nil {
+		t.Fatalf("session removed despite the guard: %v", err)
+	}
+	ok(t, st.ReleaseAgentTurn(ctx, a.ID, AgentIdle, "", 3))
+	ok(t, st.DeleteAgentSession(ctx, a.ID))
+	if _, err := st.AgentSession(ctx, a.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("after delete: %v", err)
+	}
+	if err := st.DeleteAgentSession(ctx, a.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("delete missing: %v", err)
+	}
+}
+
 func TestAgentMessagesAndToolCalls(t *testing.T) {
 	st := open(t)
 	a, err := st.CreateAgentSession(ctx, 0, "confirm", 1)

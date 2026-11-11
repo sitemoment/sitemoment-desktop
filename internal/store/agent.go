@@ -125,9 +125,21 @@ func (s *Store) AgentSessions(ctx context.Context, siteID int64) ([]AgentSession
 }
 
 // DeleteAgentSession removes a session with its messages and tool calls.
+// The guard against deleting a running session (ErrAgentBusy) is enforced
+// here, atomically with the delete, so a caller's own check-then-delete
+// can't race a concurrent Start/Resume that claims the turn in between.
 func (s *Store) DeleteAgentSession(ctx context.Context, id int64) error {
-	_, err := s.db.ExecContext(ctx, "DELETE FROM agent_sessions WHERE id = ?", id)
-	return err
+	res, err := s.db.ExecContext(ctx, "DELETE FROM agent_sessions WHERE id = ? AND status != ?", id, AgentRunning)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n > 0 {
+		return nil
+	}
+	if _, err := s.AgentSession(ctx, id); err != nil {
+		return err // ErrNotFound: already gone
+	}
+	return ErrAgentBusy
 }
 
 // TitleAgentSession sets the title once (a session keeps its first title).
