@@ -9,16 +9,16 @@ import "net/netip"
 var blockedPrefixes = func() []netip.Prefix {
 	var out []netip.Prefix
 	for _, s := range []string{
-		"0.0.0.0/8",       // "this network"
-		"10.0.0.0/8",      // private
-		"100.64.0.0/10",   // CGNAT
-		"127.0.0.0/8",     // loopback
-		"169.254.0.0/16",  // link-local, incl. cloud metadata 169.254.169.254
-		"172.16.0.0/12",   // private
-		"192.0.0.0/24",    // IETF protocol assignments
-		"192.0.2.0/24",    // TEST-NET-1
-		"192.88.99.0/24",  // 6to4 relay anycast
-		"192.168.0.0/16",  // private
+		"0.0.0.0/8",      // "this network"
+		"10.0.0.0/8",     // private
+		"100.64.0.0/10",  // CGNAT
+		"127.0.0.0/8",    // loopback
+		"169.254.0.0/16", // link-local, incl. cloud metadata 169.254.169.254
+		"172.16.0.0/12",  // private
+		"192.0.0.0/24",   // IETF protocol assignments
+		"192.0.2.0/24",   // TEST-NET-1
+		"192.88.99.0/24", // 6to4 relay anycast
+		"192.168.0.0/16", // private
 		// 198.18.0.0/15 (benchmarking) is deliberately allowed: proxy tools in
 		// TUN mode with fake-ip DNS (Clash, Surge) answer every lookup from it.
 		"198.51.100.0/24", // TEST-NET-2
