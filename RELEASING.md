@@ -209,6 +209,16 @@ UPDATE_SIGNING_KEY=… go run ./cmd/updsign -sign -tag v0.5.0 -name SiteMoment-m
 go run ./cmd/updsign -verify -pub "$UPDATE_PUBLIC_KEY" -tag v0.5.0 -name SiteMoment-macos-universal.zip SiteMoment-macos-universal.zip
 ```
 
+**Where the current key pair lives** (set up 2026-11-11, Task 18): the
+public half is the repository variable `UPDATE_PUBLIC_KEY`; the private
+half is the secret `UPDATE_SIGNING_KEY` on the `release` **environment**
+(required reviewer: `allenyoda`; deployment branch policy limited to tags
+matching `v*`). It is also backed up offline, in this Mac's login keychain,
+as a generic password item — service `SiteMoment update signing key`,
+account `sitemoment-desktop` (`security find-generic-password -a
+sitemoment-desktop -s "SiteMoment update signing key" -w` reads it back).
+No copy of the private key lives in this repository or in any log.
+
 Rotating the key: sign one more release under the old private key that
 compiles in the new public key, then switch to the new private key from the
 next release on. **If the private key is lost**, clients that already have
