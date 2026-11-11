@@ -3,6 +3,7 @@ package oauthx
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strings"
 	"testing"
@@ -118,5 +119,21 @@ func TestReceiverTimeout(t *testing.T) {
 	defer cancel()
 	if _, err := r.Wait(ctx, "s1"); err == nil {
 		t.Fatal("no timeout")
+	}
+}
+
+func TestReceiverAuthError(t *testing.T) {
+	r, err := Listen()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	go get(t, r.RedirectURI()+"?error=access_denied&state=s1")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, err = r.Wait(ctx, "s1")
+	var ae *AuthError
+	if !errors.As(err, &ae) || ae.Code != "access_denied" {
+		t.Fatalf("Wait error = %#v", err)
 	}
 }

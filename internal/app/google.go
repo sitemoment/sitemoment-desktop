@@ -19,6 +19,19 @@ const googleKeyPrefix = "google:"
 // locally cached copy of it) has not resolved one either.
 var ErrGoogleNotConfigured = errors.New("SiteMoment 还没有配置 Google 登录。请联系站长在后台（sitemoment.com/admx → 桌面客户端）设置。")
 
+// ErrGoogleAuthTimeout: the browser never came back within the login
+// timeout. The usual causes are a blocked consent page (the app is in
+// testing and the account is not a test user) or no route to Google.
+var ErrGoogleAuthTimeout = errors.New("浏览器里没有完成 Google 授权（5 分钟超时）。如果页面提示「访问被阻止」，请让站长把你的 Google 账号加进测试用户；如果打不开 Google，请检查 设置 → 网络代理。")
+
+// ErrGoogleAccessDenied is Google's error=access_denied: the user said no,
+// or the account may not use an app that is still in testing.
+var ErrGoogleAccessDenied = errors.New("你在浏览器里取消了授权，或这个 Google 账号不在测试用户名单里")
+
+// googleAuthURLEvent carries the consent URL (a string) to the main window
+// while Connect waits, so it can be copied into another browser.
+const googleAuthURLEvent = "google:auth-url"
+
 // GoogleTokens turns a connected account into access tokens. It is used by
 // the sync and is deliberately not a frontend service.
 type GoogleTokens struct {
@@ -53,6 +66,11 @@ type GoogleService struct {
 	Store   *store.Store
 	Secrets secret.Store
 	Open    Opener
+	// Emit, when set, sends events to the main window (googleAuthURLEvent).
+	Emit func(name string, data any)
+	// Timeout is how long Connect waits for the browser; 0 means
+	// loginTimeout.
+	Timeout time.Duration
 	// Config, when set, resolves the OAuth client from the backend: a
 	// background fetch at startup (main.go), and an on-demand short-timeout
 	// attempt here whenever nothing is configured yet.
@@ -96,13 +114,29 @@ func (g *GoogleService) Connect(ctx context.Context) (store.Connection, error) {
 	defer r.Close()
 	verifier, challenge := oauthx.NewPKCE()
 	state := oauthx.RandomState()
-	if err := g.Open(g.OAuth.AuthCodeURL(r.RedirectURI(), state, challenge)); err != nil {
+	authURL := g.OAuth.AuthCodeURL(r.RedirectURI(), state, challenge)
+	if g.Emit != nil {
+		g.Emit(googleAuthURLEvent, authURL)
+	}
+	if err := g.Open(authURL); err != nil {
 		return store.Connection{}, err
 	}
-	ctx, cancel := context.WithTimeout(ctx, loginTimeout)
+	timeout := g.Timeout
+	if timeout <= 0 {
+		timeout = loginTimeout
+	}
+	parent := ctx
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	code, err := r.Wait(ctx, state)
-	if err != nil {
+	var authErr *oauthx.AuthError
+	switch {
+	case err == nil:
+	case errors.As(err, &authErr) && authErr.Code == "access_denied":
+		return store.Connection{}, ErrGoogleAccessDenied
+	case errors.Is(err, context.DeadlineExceeded) && parent.Err() == nil:
+		return store.Connection{}, ErrGoogleAuthTimeout
+	default:
 		return store.Connection{}, err
 	}
 	grant, err := g.OAuth.Exchange(ctx, code, verifier, r.RedirectURI())

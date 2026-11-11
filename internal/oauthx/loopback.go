@@ -31,6 +31,12 @@ func page(errParam string) string {
 
 type result struct{ code, state, err string }
 
+// AuthError is the "error" the authorization server redirected back with
+// (RFC 6749 4.1.2.1), e.g. "access_denied".
+type AuthError struct{ Code string }
+
+func (e *AuthError) Error() string { return "oauthx: authorization failed: " + e.Code }
+
 // Receiver listens on 127.0.0.1 for one OAuth redirect.
 type Receiver struct {
 	ln  net.Listener
@@ -105,7 +111,7 @@ func (r *Receiver) Wait(ctx context.Context, state string) (string, error) {
 		return "", ctx.Err()
 	case res := <-r.ch:
 		if res.err != "" {
-			return "", fmt.Errorf("oauthx: authorization failed: %s", res.err)
+			return "", &AuthError{Code: res.err}
 		}
 		if subtle.ConstantTimeCompare([]byte(res.state), []byte(state)) != 1 {
 			return "", errors.New("oauthx: state mismatch")

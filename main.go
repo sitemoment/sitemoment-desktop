@@ -222,7 +222,7 @@ func main() {
 		Name: "SiteMoment",
 		Services: []application.Service{
 			application.NewService(&app.AccountService{Cloud: cl, Open: open}),
-			application.NewService(&app.GoogleService{OAuth: oauth, GSC: gsc, GA: ga, Tokens: tokens, Store: st, Secrets: secrets, Open: open, Config: googleConfig}),
+			application.NewService(&app.GoogleService{OAuth: oauth, GSC: gsc, GA: ga, Tokens: tokens, Store: st, Secrets: secrets, Open: open, Emit: dispatch, Config: googleConfig}),
 			application.NewService(&app.BingService{Bing: bingc, Store: st, Secrets: secrets}),
 			application.NewService(&app.SiteService{Store: st, Sync: syncSvc.SyncNow}),
 			application.NewService(syncSvc),
