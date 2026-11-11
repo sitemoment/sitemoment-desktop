@@ -98,12 +98,19 @@ type CrawlResult struct {
 	RobotsTxt bool   `json:"robotsTxt"`
 	// RobotsBlocksRoot: the "*" group disallows the whole site.
 	RobotsBlocksRoot bool `json:"robotsBlocksRoot"`
+	// RobotsStatus is robots.txt's HTTP status (0 when the request failed:
+	// RobotsError says why). A 5xx or a failed request means no URL is
+	// crawled (RFC 9309 §2.3.1.4); a 4xx means everything may be.
+	RobotsStatus int    `json:"robotsStatus"`
+	RobotsError  string `json:"robotsError,omitempty"`
 	// Sitemaps are the sitemap URLs that were read successfully.
 	Sitemaps    []string      `json:"sitemaps"`
 	SitemapURLs []string      `json:"sitemapUrls"`
 	Pages       []CrawledPage `json:"pages"`
 	// Truncated: MaxPages, MaxDepth or the time budget stopped the crawl with URLs left.
 	Truncated bool `json:"truncated"`
+	// Disallowed counts the URLs robots.txt keeps our crawler away from (not fetched).
+	Disallowed int `json:"disallowed"`
 }
 
 // skipExt are link targets that are never HTML pages.
@@ -115,8 +122,9 @@ var skipExt = map[string]bool{
 
 // Crawl fetches up to MaxPages same-site URLs breadth-first, starting from
 // start and the URLs of the site's sitemaps (robots.txt Sitemap: lines on the
-// same host, else /sitemap.xml). Only a bad start URL is an error; failed
-// fetches are recorded on their page.
+// same host, else /sitemap.xml). URLs robots.txt disallows for the fetcher's
+// user agent are skipped and counted. Only a bad start URL is an error;
+// failed fetches are recorded on their page.
 func Crawl(ctx context.Context, f *Fetcher, start string, opt CrawlOptions) (*CrawlResult, error) {
 	opt = opt.withDefaults()
 	startURL, err := normalizeURL(start, f.anyPort)
@@ -131,7 +139,7 @@ func Crawl(ctx context.Context, f *Fetcher, start string, opt CrawlOptions) (*Cr
 	defer cancel()
 
 	res := &CrawlResult{Start: startURL, Host: hostKey(origin.Hostname()), Sitemaps: []string{}, SitemapURLs: []string{}, Pages: []CrawledPage{}}
-	c := &crawler{f: f, opt: opt, res: res, seen: map[string]int{}}
+	c := &crawler{f: f, opt: opt, res: res, seen: map[string]int{}, disallowed: map[string]bool{}}
 	c.readSitemaps(ctx, origin)
 	inSitemap := map[string]bool{}
 	for _, u := range res.SitemapURLs {
@@ -151,6 +159,13 @@ func Crawl(ctx context.Context, f *Fetcher, start string, opt CrawlOptions) (*Cr
 			}
 			if _, dup := c.seen[q.url]; dup || !c.crawlable(q.url) {
 				dups = append(dups, q)
+				continue
+			}
+			if c.robots != nil && !c.robots.allowed(f.agentToken(), q.url) {
+				if !c.disallowed[q.url] {
+					c.disallowed[q.url] = true
+					res.Disallowed++
+				}
 				continue
 			}
 			if len(res.Pages)+len(batch) >= opt.MaxPages || depth > opt.MaxDepth || ctx.Err() != nil {
@@ -189,6 +204,9 @@ type crawler struct {
 	opt  CrawlOptions
 	res  *CrawlResult
 	seen map[string]int // url → index in res.Pages
+	// robots is the site's robots.txt (nil when it has none).
+	robots     *robotsInfo
+	disallowed map[string]bool
 }
 
 // markLinked records the first linking page on an already crawled URL.
@@ -210,9 +228,23 @@ func (c *crawler) crawlable(raw string) bool {
 
 func (c *crawler) readSitemaps(ctx context.Context, origin *url.URL) {
 	var candidates []string
-	if r, err := c.f.Get(ctx, origin.String()+"/robots.txt"); err == nil && r.StatusCode >= 200 && r.StatusCode < 300 {
+	r, err := c.f.Get(ctx, origin.String()+"/robots.txt")
+	if err != nil {
+		c.res.RobotsError = "fetch_failed"
+		if fe, ok := err.(*FetchError); ok {
+			c.res.RobotsError = fe.Reason
+		}
+	} else {
+		c.res.RobotsStatus = r.StatusCode
+	}
+	if c.res.RobotsError != "" || c.res.RobotsStatus >= 500 {
+		// RFC 9309 §2.3.1.4: an unreachable robots.txt means "crawl nothing".
+		c.robots = &robotsInfo{groups: []robotsGroup{{agents: []string{"*"}, rules: []robotsRule{{pattern: "/"}}}}}
+	}
+	if err == nil && r.StatusCode >= 200 && r.StatusCode < 300 {
 		c.res.RobotsTxt = true
 		ri := parseRobots(r.Body)
+		c.robots = &ri
 		c.res.RobotsBlocksRoot = ri.blocksRoot
 		for _, s := range ri.sitemaps {
 			if u, err := url.Parse(s); err == nil && hostKey(u.Hostname()) == hostKey(origin.Hostname()) {

@@ -135,6 +135,12 @@ func NewFetcher(cfg FetcherConfig) *Fetcher {
 	return f
 }
 
+// agentToken is the product token of the User-Agent ("SiteMomentBot"), the
+// name robots.txt groups address.
+func (f *Fetcher) agentToken() string {
+	return strings.TrimSpace(strings.SplitN(f.cfg.UserAgent, "/", 2)[0])
+}
+
 // control is the last line of defence: it runs on the socket right before
 // connect and refuses blocked addresses even if a caller bypassed dial.
 func (f *Fetcher) control(_, address string, _ syscall.RawConn) error {
