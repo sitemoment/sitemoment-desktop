@@ -1,0 +1,339 @@
+# Builds and publishes a release when a v* tag is pushed to this repository
+# (not a fork), or for an existing tag run by hand. Run by hand without a tag
+# it only test-builds the dispatched commit (version 0.0.0-ci.<run>, mac and
+# windows artifacts on the run, nothing published, no signing secrets
+# required). A real release always requires the update-signing key pair
+# (UPDATE_PUBLIC_KEY / UPDATE_SIGNING_KEY): the client fails closed on any
+# release once a public key is compiled in, so a release that could not sign
+# its update assets would make every running client refuse it. Apple/Windows
+# code signing stay optional and switch on per platform when their secrets
+# exist. See RELEASING.md for every secret, variable and the trust model
+# behind update signing.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing tag to build and publish, e.g. v0.5.0 (empty = test build, nothing published)
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.event_name == 'push' && github.ref_name || github.event.inputs.tag || github.run_id }}
+  cancel-in-progress: false
+
+env:
+  # The tag to release; empty for a test build of the dispatched commit.
+  TAG: ${{ github.event_name == 'push' && github.ref_name || github.event.inputs.tag }}
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      prerelease: ${{ steps.v.outputs.prerelease }}
+      publish: ${{ steps.v.outputs.publish }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.TAG || github.sha }}
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - id: v
+        name: Version from the tag
+        env:
+          UPDATE_PUBLIC_KEY: ${{ vars.UPDATE_PUBLIC_KEY }}
+        run: |
+          if [ -z "$TAG" ]; then
+            echo "version=0.0.0-ci.$GITHUB_RUN_NUMBER" >> "$GITHUB_OUTPUT"
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::no tag: a build-only run (nothing published, update signing not required)"
+            exit 0
+          fi
+
+          # A tag push only comes from this repository for real: in a fork,
+          # the event's github.repository is the fork, never upstream, and
+          # the upstream "release" environment's secrets are never reachable
+          # from it (see RELEASING.md). Still refuse to publish defensively
+          # in case this workflow is ever reused from a fork context.
+          if [ "${{ github.event_name }}" = "push" ] && [ "${{ github.repository }}" != "sitemoment/sitemoment-desktop" ]; then
+            echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::tag push from ${{ github.repository }}, not sitemoment/sitemoment-desktop: building only, not publishing"
+            exit 0
+          fi
+
+          echo "publish=true" >> "$GITHUB_OUTPUT"
+          version="${TAG#v}"
+          if ! num=$(go run ./cmd/stamp-version -check "$version"); then
+            echo "::error::tag $TAG is not a valid release version (go run ./cmd/stamp-version -check): $num"; exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          case "$version" in
+            *-*) echo "prerelease=true" >> "$GITHUB_OUTPUT" ;;
+            *) echo "prerelease=false" >> "$GITHUB_OUTPUT" ;;
+          esac
+
+          # A real release must be able to authenticate its own updates: the
+          # client fails closed once a public key is compiled in (see
+          # RELEASING.md's "update trust model"), so shipping a release that
+          # could not sign its update assets would make every client that
+          # already trusts a public key refuse this release and, worse,
+          # every later one too unless re-signed under the old key.
+          #
+          # UPDATE_PUBLIC_KEY is a plain repository variable, so it can be
+          # required right here. UPDATE_SIGNING_KEY is deliberately a secret
+          # on the "release" *environment* (required reviewers), which makes
+          # it unreadable - not merely empty, genuinely absent from this
+          # job's context - by any job that does not declare
+          # `environment: release`; this job intentionally does not, so that
+          # approval is only asked for once, at the one job that actually
+          # uses the key (publish, below). That job fails the same way if
+          # the secret turns out to be missing once it runs.
+          if [ -z "$UPDATE_PUBLIC_KEY" ]; then
+            echo "::error::variable UPDATE_PUBLIC_KEY is not set; a real release must compile in an update public key (see RELEASING.md)"; exit 1
+          fi
+
+  test:
+    uses: ./.github/workflows/ci.yml
+
+  macos:
+    needs: [version, test]
+    runs-on: macos-latest
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      HAS_MAC_CERT: ${{ secrets.MAC_CERT_P12_BASE64 != '' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.TAG || github.sha }}
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install wails3
+        run: go install github.com/wailsapp/wails/v3/cmd/wails3@v3.1.0
+      - name: Frontend dependencies
+        working-directory: frontend
+        run: npm ci
+      - name: Stamp the version
+        run: go run ./cmd/stamp-version "$VERSION"
+      - name: Import the Developer ID certificate and the notary key
+        if: env.HAS_MAC_CERT == 'true'
+        env:
+          MAC_CERT_P12_BASE64: ${{ secrets.MAC_CERT_P12_BASE64 }}
+          MAC_CERT_PASSWORD: ${{ secrets.MAC_CERT_PASSWORD }}
+          MAC_SIGN_IDENTITY: ${{ secrets.MAC_SIGN_IDENTITY }}
+          MAC_NOTARY_KEY_P8_BASE64: ${{ secrets.MAC_NOTARY_KEY_P8_BASE64 }}
+        run: |
+          if [ -z "$MAC_SIGN_IDENTITY" ]; then echo "::error::MAC_CERT_P12_BASE64 is set but MAC_SIGN_IDENTITY is not"; exit 1; fi
+          kc="$RUNNER_TEMP/signing.keychain-db"
+          pw=$(openssl rand -hex 24)
+          security create-keychain -p "$pw" "$kc"
+          security set-keychain-settings -lut 21600 "$kc"
+          security unlock-keychain -p "$pw" "$kc"
+          printf '%s' "$MAC_CERT_P12_BASE64" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security import "$RUNNER_TEMP/cert.p12" -k "$kc" -P "$MAC_CERT_PASSWORD" -T /usr/bin/codesign
+          rm -f "$RUNNER_TEMP/cert.p12"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$pw" "$kc" > /dev/null
+          security list-keychains -d user -s "$kc" $(security list-keychains -d user | tr -d '"')
+          echo "MAC_SIGN_KEYCHAIN=$kc" >> "$GITHUB_ENV"
+          if [ -n "$MAC_NOTARY_KEY_P8_BASE64" ]; then
+            printf '%s' "$MAC_NOTARY_KEY_P8_BASE64" | base64 --decode > "$RUNNER_TEMP/notary.p8"
+            echo "MAC_NOTARY_KEY_FILE=$RUNNER_TEMP/notary.p8" >> "$GITHUB_ENV"
+          fi
+      - name: Build, sign and package (wails3 task darwin:release)
+        env:
+          GOOGLE_CLIENT_ID: ${{ vars.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+          UPDATE_PUBLIC_KEY: ${{ vars.UPDATE_PUBLIC_KEY }}
+          MAC_SIGN_IDENTITY: ${{ env.HAS_MAC_CERT == 'true' && secrets.MAC_SIGN_IDENTITY || '' }}
+          MAC_NOTARY_KEY_ID: ${{ secrets.MAC_NOTARY_KEY_ID }}
+          MAC_NOTARY_ISSUER_ID: ${{ secrets.MAC_NOTARY_ISSUER_ID }}
+        run: wails3 task darwin:release
+      - name: Check the bundle
+        run: |
+          lipo -archs bin/SiteMoment.app/Contents/MacOS/sitemoment-desktop | grep -q 'x86_64 arm64'
+          test "$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' bin/SiteMoment.app/Contents/Info.plist)" = "${VERSION%%-*}"
+          codesign --verify --strict --verbose=2 bin/SiteMoment.app
+          test "$(unzip -Z1 bin/release/SiteMoment-macos-universal.zip | cut -d/ -f1 | sort -u)" = "SiteMoment.app"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: macos
+          path: bin/release/*
+          if-no-files-found: error
+      - name: Remove the signing keychain and key
+        if: always()
+        run: |
+          if [ -n "${MAC_SIGN_KEYCHAIN:-}" ]; then security delete-keychain "$MAC_SIGN_KEYCHAIN" || true; fi
+          rm -f "$RUNNER_TEMP/notary.p8" "$RUNNER_TEMP/cert.p12"
+
+  windows:
+    needs: [version, test]
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      HAS_WIN_CERT: ${{ secrets.WINDOWS_CERT_PFX_BASE64 != '' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.TAG || github.sha }}
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install wails3 and NSIS
+        run: |
+          go install github.com/wailsapp/wails/v3/cmd/wails3@v3.1.0
+          if (-not (Get-Command makensis -ErrorAction SilentlyContinue)) {
+            choco install nsis -y --no-progress
+            "${env:ProgramFiles(x86)}\NSIS" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          }
+      - name: Frontend dependencies
+        working-directory: frontend
+        run: npm ci
+      - name: Stamp the version
+        run: go run ./cmd/stamp-version $env:VERSION
+      - name: Build the exe
+        env:
+          GOOGLE_CLIENT_ID: ${{ vars.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+          UPDATE_PUBLIC_KEY: ${{ vars.UPDATE_PUBLIC_KEY }}
+        run: wails3 task windows:build ARCH=amd64
+      - name: Decode the code signing certificate
+        if: env.HAS_WIN_CERT == 'true'
+        env:
+          WINDOWS_CERT_PFX_BASE64: ${{ secrets.WINDOWS_CERT_PFX_BASE64 }}
+        run: |
+          $pfx = Join-Path $env:RUNNER_TEMP 'cert.pfx'
+          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:WINDOWS_CERT_PFX_BASE64))
+          "WINDOWS_CERT_PFX=$pfx" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+      - name: Sign the exe
+        env:
+          WINDOWS_CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
+          WINDOWS_TIMESTAMP_URL: ${{ vars.WINDOWS_TIMESTAMP_URL }}
+        run: ./build/windows/sign.ps1 bin/sitemoment-desktop.exe
+      - name: Build the installer (per-user, WebView2 bootstrapper)
+        run: wails3 task windows:nsis ARCH=amd64
+      - name: Sign the installer
+        env:
+          WINDOWS_CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
+          WINDOWS_TIMESTAMP_URL: ${{ vars.WINDOWS_TIMESTAMP_URL }}
+        run: ./build/windows/sign.ps1 bin/sitemoment-desktop-amd64-installer.exe
+      - name: Release files
+        run: |
+          New-Item -ItemType Directory -Force bin/release | Out-Null
+          Copy-Item bin/sitemoment-desktop-amd64-installer.exe bin/release/SiteMoment-windows-amd64-setup.exe
+          Compress-Archive -Path bin/sitemoment-desktop.exe -DestinationPath bin/release/SiteMoment-windows-amd64.zip
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows
+          path: bin/release/*
+          if-no-files-found: error
+      - name: Remove the certificate
+        if: always()
+        run: Remove-Item -Force -ErrorAction SilentlyContinue (Join-Path $env:RUNNER_TEMP 'cert.pfx')
+
+  publish:
+    needs: [version, macos, windows]
+    if: needs.version.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    # Required reviewers on the "release" environment are the actual gate on
+    # signing a real release's update assets: this job is the only place
+    # UPDATE_SIGNING_KEY is read, so a tag push alone - even by someone with
+    # write access to the repository - is not enough to produce a signed
+    # release without a reviewer's sign-off. See RELEASING.md.
+    environment: release
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      PRERELEASE: ${{ needs.version.outputs.prerelease }}
+      UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
+      SIGNED_MAC: ${{ secrets.MAC_CERT_P12_BASE64 != '' }}
+      SIGNED_WIN: ${{ secrets.WINDOWS_CERT_PFX_BASE64 != '' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.TAG }}
+          fetch-depth: 0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Checksums and update signatures
+        run: |
+          cd dist
+          ls -la
+          for f in SiteMoment-macos-universal.dmg SiteMoment-macos-universal.zip SiteMoment-windows-amd64-setup.exe SiteMoment-windows-amd64.zip; do
+            test -s "$f" || { echo "::error::missing $f"; exit 1; }
+          done
+          # This is the one job bound to the "release" environment, so it is
+          # the only place UPDATE_SIGNING_KEY (an environment secret with
+          # required reviewers) is actually readable - the version job
+          # upstream could not check for it. Require it here, for real:
+          # every release must sign its update assets once a public key is
+          # compiled into the client (see RELEASING.md).
+          if [ -z "$UPDATE_SIGNING_KEY" ]; then
+            echo "::error::UPDATE_SIGNING_KEY is not set on the 'release' environment; a real release must sign its update assets (see RELEASING.md)"; exit 1
+          fi
+          go run ../cmd/updsign -sign -tag "$TAG" -name SiteMoment-macos-universal.zip SiteMoment-macos-universal.zip
+          go run ../cmd/updsign -sign -tag "$TAG" -name SiteMoment-windows-amd64.zip SiteMoment-windows-amd64.zip
+          sha256sum SiteMoment-* > SHA256SUMS
+          cat SHA256SUMS
+      - name: Release notes
+        run: |
+          prev=$(git describe --tags --abbrev=0 "$TAG^" 2>/dev/null || true)
+          {
+            echo "SiteMoment Desktop $VERSION"
+            echo
+            echo "**下载**：macOS（Apple 芯片和 Intel，macOS 12+）\`SiteMoment-macos-universal.dmg\`；Windows 10/11 64 位 \`SiteMoment-windows-amd64-setup.exe\`（装到当前用户，不需要管理员权限）。已经装了的会在一天内自动提示更新。"
+            echo
+            if [ "$SIGNED_MAC" != "true" ]; then
+              echo "> macOS 版这次没有 Apple 签名和公证：第一次打开时如果提示无法验证开发者，到「系统设置 → 隐私与安全性」点「仍要打开」。"
+            fi
+            if [ "$SIGNED_WIN" != "true" ]; then
+              echo "> Windows 版这次没有代码签名：SmartScreen 提示时点「更多信息 → 仍要运行」。"
+            fi
+            echo
+            echo "校验：\`SHA256SUMS\` 列出每个文件的 SHA-256；应用自动更新时会核对它和 .sig 签名。"
+            echo
+            if [ -n "$prev" ]; then
+              echo "## 改动（$prev → $TAG）"
+              git log --no-merges --pretty='- %s' "$prev..$TAG"
+            else
+              echo "## 改动"
+              git log --no-merges --pretty='- %s' -n 50 "$TAG"
+            fi
+          } > notes.md
+          cat notes.md
+      - name: Publish the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          flags=()
+          if [ "$PRERELEASE" = "true" ]; then flags+=(--prerelease); else flags+=(--latest); fi
+          gh release create "$TAG" dist/* --verify-tag --title "SiteMoment $VERSION" --notes-file notes.md "${flags[@]}"
