@@ -32,8 +32,8 @@ type Wayback struct {
 }
 
 // NewWayback builds the client.
-func NewWayback(baseURL string) *Wayback {
-	return &Wayback{http: newClient(60 * time.Second), baseURL: baseURL}
+func NewWayback(baseURL string, opts ...Option) *Wayback {
+	return &Wayback{http: newClient(60*time.Second, opts...), baseURL: baseURL}
 }
 
 var archiveSkipExt = map[string]bool{
