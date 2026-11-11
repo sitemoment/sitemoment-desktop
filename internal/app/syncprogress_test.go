@@ -145,6 +145,45 @@ func TestProgressNextBackfillAtUsesTheLoopsOwnSchedule(t *testing.T) {
 	}
 }
 
+// TestProgressSuppressesNextBackfillAtWhenSkipped checks that a site Stop
+// just marked skipBackfill on does not show a next-backfill time: nothing
+// is actually scheduled for it (RunBackfillLoop leaves it alone until a
+// fresh SyncNow), so showing the loop's ordinary next tick there would be
+// misleading.
+func TestProgressSuppressesNextBackfillAtWhenSkipped(t *testing.T) {
+	siteID, st := bindSite(t, "skip-next-backfill.example.com")
+	s := &SyncService{Store: st}
+	s.mu.Lock()
+	s.backfillLeft = map[int64]bool{siteID: true}
+	s.nextBackfillAt = time.Now().Add(37 * time.Minute).Unix()
+	s.mu.Unlock()
+
+	rows, err := s.Progress(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gsc := findSource(t, rows[0], "gsc")
+	if gsc.State != stateBackfilling {
+		t.Fatalf("state = %q, want %q", gsc.State, stateBackfilling)
+	}
+	if gsc.NextBackfillAt == 0 {
+		t.Fatal("NextBackfillAt = 0 before Stop, want the loop's schedule")
+	}
+
+	s.mu.Lock()
+	s.skipBackfill = map[int64]bool{siteID: true}
+	s.mu.Unlock()
+
+	rows, err = s.Progress(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gsc = findSource(t, rows[0], "gsc")
+	if gsc.NextBackfillAt != 0 {
+		t.Fatalf("NextBackfillAt = %d after Stop (skipBackfill), want 0 (shown as \"—\")", gsc.NextBackfillAt)
+	}
+}
+
 // TestProgressStatesFollowRunFlags checks that Progress reflects paused,
 // then a run in progress, then a failed run's error, in that priority
 // order, for a GA4-bound site.

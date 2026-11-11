@@ -364,6 +364,53 @@ func TestStopCancelsRunningSync(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("run did not finish after Stop")
 	}
+	// Regression: Stop canceling a source mid-request used to record that
+	// cancellation as the source's own error (context canceled), which
+	// Progress would then show as 失败 for up to RunSyncLoop's whole
+	// interval.
+	if msg := s.sourceError(siteID, "gsc"); msg != "" {
+		t.Fatalf("gsc source error = %q after Stop, want \"\" (a cancellation is not a real failure)", msg)
+	}
+}
+
+// TestStopDoesNotOverwriteAGenuineEarlierSourceError checks that when Stop
+// cancels a later source mid-request, an earlier source's genuine (not
+// cancellation-related) failure in the same run is still recorded —
+// dropping *only* the spurious "context canceled" error, not every
+// source's.
+func TestStopDoesNotOverwriteAGenuineEarlierSourceError(t *testing.T) {
+	siteID, st := bindSite(t, "mixed-stop.example.com")
+	failing := &fakeSource{name: "gsc", bound: true, err: errors.New("boom")}
+	hold := &holdingSource{name: "bing", entered: make(chan struct{}, 1), release: make(chan struct{})}
+	finished := make(chan SyncStatus, 4)
+	s := &SyncService{Sources: []Source{failing, hold}, Store: st, Emit: func(name string, data any) {
+		if st, ok := data.(SyncStatus); ok && st.State != "running" {
+			finished <- st
+		}
+	}}
+
+	s.SyncNow(siteID)
+	select {
+	case <-hold.entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("bing did not start")
+	}
+	s.Stop(siteID)
+	select {
+	case got := <-finished:
+		if got.State != "stopped" {
+			t.Fatalf("state = %q, want %q", got.State, "stopped")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("run did not finish after Stop")
+	}
+
+	if msg := s.sourceError(siteID, "gsc"); msg == "" {
+		t.Fatal("gsc's genuine earlier failure was dropped")
+	}
+	if msg := s.sourceError(siteID, "bing"); msg != "" {
+		t.Fatalf("bing source error = %q, want \"\" (canceled mid-request, not a real failure)", msg)
+	}
 }
 
 // TestStopDropsPendingRetry checks that Stop also cancels a retry
@@ -412,6 +459,17 @@ func TestStopDropsPendingRetry(t *testing.T) {
 	}
 	if n := calls.Load(); n != callsAfterFirstRun {
 		t.Fatalf("GSC.Query called %d more times after Stop, want 0 (no retry)", n-callsAfterFirstRun)
+	}
+	// Regression: at this point the run itself already finished (status
+	// "failed"), so Stop only had a pending retry to cancel — no active
+	// run for finish to mark skipBackfill through. Stop must still set it
+	// directly, or RunBackfillLoop could resync the site again within
+	// backfillLoopInterval despite the user stopping it.
+	s.mu.Lock()
+	skip := s.skipBackfill[siteID]
+	s.mu.Unlock()
+	if !skip {
+		t.Fatal("Stop on a site with only a pending retry did not set skipBackfill")
 	}
 }
 

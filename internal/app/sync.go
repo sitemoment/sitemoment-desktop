@@ -228,17 +228,30 @@ func (s *SyncService) SyncNow(siteID int64) {
 
 // Stop cancels siteID's currently running sync, if any, and drops any
 // pending automatic retry for it. The run's status settles to "stopped"
-// once its goroutine notices; call SyncNow afterwards to start over. Until
-// then, RunBackfillLoop leaves the site alone (see skipBackfill).
+// once its goroutine notices; call SyncNow afterwards to start over. In
+// either case (a run actually in flight, or just a retry still waiting to
+// fire), Stop also marks the site for RunBackfillLoop to leave alone
+// (skipBackfill) — a retry alone has no run to settle through finish, so
+// without this a site stopped only mid-retry could still get resynced by
+// the backfill loop within backfillLoopInterval.
 func (s *SyncService) Stop(siteID int64) {
 	s.mu.Lock()
+	stoppedSomething := false
 	if cancel, ok := s.cancel[siteID]; ok {
 		cancel()
+		stoppedSomething = true
 	}
 	if cancel, ok := s.retryCancel[siteID]; ok {
 		cancel()
+		stoppedSomething = true
 	}
 	delete(s.again, siteID)
+	if stoppedSomething {
+		if s.skipBackfill == nil {
+			s.skipBackfill = map[int64]bool{}
+		}
+		s.skipBackfill[siteID] = true
+	}
 	s.mu.Unlock()
 }
 
@@ -385,12 +398,20 @@ func (s *SyncService) run(ctx context.Context, cancel context.CancelFunc, token,
 		res, serr := src.Sync(ctx, site)
 		total += res.Requests
 		remaining += res.Remaining
-		if serr != nil {
+		switch {
+		case serr == nil:
+			sourceErrs[src.Name()] = ""
+		case errors.Is(serr, context.Canceled) || errors.Is(serr, context.DeadlineExceeded):
+			// Stop or SetPaused(true) canceled this source mid-request:
+			// not a real failure. Leave its sourceErrs entry alone (don't
+			// record this as its error, and don't clear a genuine earlier
+			// one either) — otherwise Progress would show "失败：…context
+			// canceled" for this source until some later run happens to
+			// overwrite it, up to RunSyncLoop's full interval away.
+		default:
 			sourceErrs[src.Name()] = syncMessage(serr)
 			problems = append(problems, sourceLabels[src.Name()]+"："+sourceErrs[src.Name()])
 			retry = retry || errors.Is(serr, google.ErrRateLimited) || errors.Is(serr, bing.ErrThrottled)
-		} else {
-			sourceErrs[src.Name()] = ""
 		}
 	}
 	<-sem

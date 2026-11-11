@@ -83,8 +83,18 @@ func (s *SyncService) Progress(ctx context.Context) ([]SiteProgress, error) {
 		s.mu.Lock()
 		status := s.status[site.ID]
 		backfillLeft := s.backfillLeft[site.ID]
+		skipBackfill := s.skipBackfill[site.ID]
 		s.mu.Unlock()
 		running := status.State == "running"
+		// A site Stop just marked skipBackfill on has no real next-check
+		// time: RunBackfillLoop will not touch it until a fresh SyncNow,
+		// which is not on any schedule. Showing the loop's ordinary next
+		// tick there would be misleading (nothing is actually scheduled
+		// for this site).
+		dueAt := int64(0)
+		if !skipBackfill {
+			dueAt = nextBackfillAt
+		}
 
 		sp := SiteProgress{SiteID: site.ID, Host: site.Host}
 
@@ -103,7 +113,7 @@ func (s *SyncService) Progress(ctx context.Context) ([]SiteProgress, error) {
 			src := SourceProgress{Source: "gsc", Label: "Search Console", Slices: slices}
 			src.State, src.Error = sourceState(paused, running, errMsg, anySliceBackfilling(slices))
 			if backfillLeft && src.State == stateBackfilling {
-				src.NextBackfillAt = nextBackfillAt
+				src.NextBackfillAt = dueAt
 			}
 			sp.Sources = append(sp.Sources, src)
 		}
@@ -123,7 +133,7 @@ func (s *SyncService) Progress(ctx context.Context) ([]SiteProgress, error) {
 			src := SourceProgress{Source: "ga", Label: "GA4", Slices: slices}
 			src.State, src.Error = sourceState(paused, running, errMsg, anySliceBackfilling(slices))
 			if backfillLeft && src.State == stateBackfilling {
-				src.NextBackfillAt = nextBackfillAt
+				src.NextBackfillAt = dueAt
 			}
 			sp.Sources = append(sp.Sources, src)
 		}
