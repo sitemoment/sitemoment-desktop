@@ -237,6 +237,41 @@ func TestConfirmModeHoldsPaidCallsUntilApproved(t *testing.T) {
 	}
 }
 
+func TestQuoteErrorDoesNotRunTheCallOrNeedConfirmation(t *testing.T) {
+	r := newRig(t, ModeConfirm, call("", tc("c1", "lookup_keywords", `{"keywords":["x"]}`)), say("ok"))
+	r.cloud.quoteErr = errors.New("HTTP 503")
+	r.send(t, "x")
+	if r.cloud.dataCalls() != 0 {
+		t.Fatal("paid call ran despite a failed price quote")
+	}
+	if ev := r.ev.last("confirm_needed"); ev != nil {
+		t.Fatalf("a quote error should not pause for confirmation: %v", ev)
+	}
+	s := r.session(t)
+	if s.Credits != 0 || s.Status != store.AgentIdle {
+		t.Fatalf("session %+v", s)
+	}
+	msgs := r.model.requests()[1].Messages
+	last := msgs[len(msgs)-1]
+	if last.Role != "tool" || last.ToolCallID != "c1" {
+		t.Fatalf("no tool result for the unquotable call: %+v", msgs)
+	}
+}
+
+func TestAutoModeQuoteErrorDoesNotCountTowardTheCap(t *testing.T) {
+	r := newRig(t, ModeAuto,
+		call("", tc("c1", "lookup_keywords", `{"keywords":["a"]}`), tc("c2", "lookup_keywords", `{"keywords":["b"]}`)),
+		say("ok"))
+	r.cloud.quoteErr = errors.New("HTTP 429")
+	r.send(t, "a 和 b")
+	if r.cloud.dataCalls() != 0 {
+		t.Fatalf("auto mode ran %d paid calls despite quote errors", r.cloud.dataCalls())
+	}
+	if r.session(t).Credits != 0 {
+		t.Fatalf("credits charged despite quote errors: %+v", r.session(t))
+	}
+}
+
 func TestDeclinedPaidCallsTellTheModel(t *testing.T) {
 	r := newRig(t, ModeConfirm, call("", tc("c1", "lookup_keywords", `{"keywords":["x"]}`)), say("没有付费数据，先这样。"))
 	r.send(t, "x")

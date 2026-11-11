@@ -331,7 +331,15 @@ func (a *Agent) step(ctx context.Context, t *turn, step int, calls []llm.ToolCal
 			continue
 		}
 		maxCredits, cached, err := tool.Quote(ctx, t.env, args)
-		if err != nil || cached {
+		if err != nil {
+			// The price could not be checked (network error, 5xx, 429, ...):
+			// never run an unpriced paid call, and don't count it toward the
+			// auto-mode cap. Tell the model why instead.
+			_, forModel := describeError(err)
+			a.addToolMessage(ctx, t, c.ID, forModel)
+			continue
+		}
+		if cached {
 			run = append(run, c)
 			continue
 		}

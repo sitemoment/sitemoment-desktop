@@ -64,6 +64,7 @@ type fakeCloud struct {
 	mu       sync.Mutex
 	signedIn bool
 	quote    float64
+	quoteErr error
 	charge   float64
 	data     []string
 	err      error
@@ -77,6 +78,9 @@ func (f *fakeCloud) Catalog(context.Context) ([]cloud.Tool, error) {
 }
 
 func (f *fakeCloud) Quote(_ context.Context, tool string, _ map[string]any) (cloud.Quote, error) {
+	if f.quoteErr != nil {
+		return cloud.Quote{}, f.quoteErr
+	}
 	return cloud.Quote{Tool: tool, MaxCredits: f.quote}, nil
 }
 
