@@ -12,7 +12,10 @@ import (
 	_ "time/tzdata" // Windows may lack a zoneinfo database; gscsync needs America/Los_Angeles
 
 	"github.com/sitemoment/sitemoment-desktop/internal/app"
+	"github.com/sitemoment/sitemoment-desktop/internal/bing"
+	"github.com/sitemoment/sitemoment-desktop/internal/bingsync"
 	"github.com/sitemoment/sitemoment-desktop/internal/cloud"
+	"github.com/sitemoment/sitemoment-desktop/internal/gasync"
 	"github.com/sitemoment/sitemoment-desktop/internal/google"
 	"github.com/sitemoment/sitemoment-desktop/internal/gscsync"
 	"github.com/sitemoment/sitemoment-desktop/internal/paths"
@@ -65,7 +68,10 @@ func main() {
 		HTTP:         httpc,
 	}
 	gsc := &google.GSC{HTTP: httpc}
+	ga := &google.GA{HTTP: httpc}
+	bingc := &bing.Client{HTTP: httpc}
 	tokens := &app.GoogleTokens{OAuth: oauth, Secrets: secrets}
+	bingKeys := &app.BingKeys{Secrets: secrets}
 
 	var wapp *application.App
 	open := func(u string) error { return wapp.Browser.OpenURL(u) }
@@ -74,17 +80,26 @@ func main() {
 			wapp.Event.Emit(name, data)
 		}
 	}
-	syncer := &gscsync.Syncer{Store: st, Tokens: tokens, GSC: gsc, Progress: func(p gscsync.Progress) { emit("sync:progress", p) }}
-	syncSvc := &app.SyncService{Sources: []app.Source{app.GSCSource{Syncer: syncer}}, Store: st, Emit: emit, Ctx: ctx}
+	progress := func(p gscsync.Progress) { emit("sync:progress", p) }
+	syncSvc := &app.SyncService{
+		Sources: []app.Source{
+			app.GSCSource{Syncer: &gscsync.Syncer{Store: st, Tokens: tokens, GSC: gsc, Progress: progress}},
+			app.GASource{Syncer: &gasync.Syncer{Store: st, Tokens: tokens, GA: ga, Progress: progress}},
+			app.BingSource{Syncer: &bingsync.Syncer{Store: st, Keys: bingKeys, Bing: bingc}},
+		},
+		Store: st, Emit: emit, Ctx: ctx,
+	}
 
 	wapp = application.New(application.Options{
 		Name: "SiteMoment",
 		Services: []application.Service{
 			application.NewService(&app.AccountService{Cloud: cl, Open: open}),
-			application.NewService(&app.GoogleService{OAuth: oauth, GSC: gsc, Tokens: tokens, Store: st, Secrets: secrets, Open: open}),
+			application.NewService(&app.GoogleService{OAuth: oauth, GSC: gsc, GA: ga, Tokens: tokens, Store: st, Secrets: secrets, Open: open}),
+			application.NewService(&app.BingService{Bing: bingc, Store: st, Secrets: secrets}),
 			application.NewService(&app.SiteService{Store: st, Sync: syncSvc.SyncNow}),
 			application.NewService(syncSvc),
 			application.NewService(&app.OverviewService{Store: st}),
+			application.NewService(&app.KeywordService{Store: st, Cloud: cl, Bing: bingc, BingKeys: bingKeys}),
 			application.NewService(&app.InfoService{Version: version, DataDir: dir, DBPath: dbPath}),
 		},
 		Assets: application.AssetOptions{Handler: application.AssetFileServerFS(assets)},
