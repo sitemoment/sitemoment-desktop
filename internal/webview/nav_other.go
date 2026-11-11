@@ -1,0 +1,13 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+//go:build !darwin && !windows
+
+package webview
+
+import (
+	"github.com/wailsapp/wails/v3/pkg/application"
+	"github.com/wailsapp/wails/v3/pkg/events"
+)
+
+func onNavigated(w *application.WebviewWindow, fn func()) {
+	w.OnWindowEvent(events.Linux.WindowLoadFinished, func(*application.WindowEvent) { fn() })
+}
