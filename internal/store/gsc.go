@@ -87,6 +87,27 @@ func (s *Store) SyncDays(ctx context.Context, siteID int64, source, slice string
 	return out, rows.Err()
 }
 
+// DayImpressions sums the "date" slice's impressions per day over [from,
+// through]. Days with no row (never fetched, or fetched with zero rows) are
+// absent from the result.
+func (s *Store) DayImpressions(ctx context.Context, siteID int64, from, through string) (map[string]float64, error) {
+	rows, err := s.db.QueryContext(ctx, "SELECT day, SUM(impressions) FROM gsc_facts WHERE site_id = ? AND slice = 'date' AND day BETWEEN ? AND ? GROUP BY day", siteID, from, through)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]float64{}
+	for rows.Next() {
+		var day string
+		var imp float64
+		if err := rows.Scan(&day, &imp); err != nil {
+			return nil, err
+		}
+		out[day] = imp
+	}
+	return out, rows.Err()
+}
+
 // LatestDay is the newest fetched day of a slice, or "".
 func (s *Store) LatestDay(ctx context.Context, siteID int64, source, slice string) (string, error) {
 	var day sql.NullString
