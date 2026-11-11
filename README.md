@@ -31,6 +31,22 @@
 - Bing 的历史保留时长、限流阈值 Microsoft 没有公开，以实际返回为准。
 - [desktop] 相关的积分额度（免费版 / 付费版每月多少积分）是临时数值，还没有和负责人最终确认。
 
+**M3 已完成的功能**（分支 `m3`，后端改动在仓库 `sitemoment` 的分支 `desktop-m3`）：
+- 右侧 SEO Agent 面板（标题栏「Agent」按钮收起 / 展开）：每个站点多个会话，回答流式显示（Markdown，不渲染原始 HTML，链接在系统浏览器打开），工具调用显示成卡片（本地数据 / 免费网页 / 采集器 / SiteMoment 数据），停止按钮，花钱模式（只用免费 / 付费前确认 / 自动，自动模式每轮最多 20 积分）。付费数据在「先确认」模式下弹出确认条，写明最多扣多少积分和本月剩余。
+- 模型（设置 → AI 模型）：SiteMoment 托管（登录后可用，按 token 扣本月积分：每 1,000 token 1 积分，精确到 0.01）、OpenAI 兼容接口（base URL + key + 模型名）、Anthropic（官方 Go SDK，默认 `claude-opus-5`）。key 只存系统钥匙串。模型不支持工具调用时自动改用 JSON 协议。
+- Agent 工具：本地 GSC / GA4 / Bing / 关键词查询；站点体检、抓取网页、网址状态、旧网址检查、页面速度、谷歌联想、方法手册；采集器（谷歌搜索结果、谷歌趋势、People Also Ask）；SiteMoment 数据（web.cafe 的 13 个接口 + 付费谷歌搜索结果）。
+- 采集器：隐藏的 WebView 窗口（最多 2 个）打开网页、注入 `collectors/<id>/collector.js`，结果经原生消息通道回传并核对来源和 nonce；谷歌搜索每次间隔 ≥10 秒、每天最多 200 次、缓存 7 天；遇到验证码时弹出窗口并在主窗口顶部提示，2 分钟内没人处理就失败（Agent 会建议改用付费结果）。谷歌结果页的不透明跳转链接由 Go 逐条 GET 解析成真实网址，解析不出来时退回到面包屑里的站点。
+- 采集器页：内置和用户自己的采集器（放进数据目录的 `collectors/` 后「重新扫描」，第一次使用前要确认它访问的域名）、最近运行记录、需要人工处理的队列；状态栏显示采集队列和今天的次数。
+- 安全：采集窗口里的网页不能访问应用的资源和 `/wails/runtime`（`internal/webview.Middleware` 按窗口名返回 403）；应用事件只发给主窗口。
+
+**M3 已知问题 / 待办**：
+- Windows 上没有测过（采集窗口、导航事件、WebView2 的消息通道）。
+- 谷歌趋势采集器用的是 trends.google.com 网页自己调用的接口（`/trends/api/explore`、`widgetdata/multiline`、`widgetdata/relatedsearches`），形状只用桩数据测过；People Also Ask 在实测的结果页上没有出现，规则只用合成页面测过。第一次真实使用时核对，不对就改 `collectors/google-trends/collector.js`、`collectors/google-serp/collector.js` 并更新测试样本。
+- 谷歌对刚搜完就连续解析跳转链接会限流（200 + 几秒后的 `/goto` 跳转），解析器一条一条、限流时等 10 秒重试一次；第二轮重试的效果没有在真实页面上验证过。
+- 系统通知（macOS 通知中心）没做：需要签名的 app 包，放到 M5。
+- Anthropic 的 server-side fallbacks（beta）没有开，模型拒答时直接报错。
+- 托管模型需要后端 `desktop-m3` 部署后才能用（走 DevOpsPad，需要负责人同意）。
+
 **已知问题 / 待办**：
 - 手工端到端验收（Task 24 Step 2：真实登录、连接负责人自己的 Google 账号、5 个站点同步、和 Search Console 网页对比数字、7d/28d/90d 切换、1440×900 截图和 `design/mockups/2-console.html` 对比）需要负责人的 Google OAuth「桌面应用」客户端和已部署的后端，尚未执行，列为待办。
 - 后端改动（`desktop-auth` 分支）尚未部署，需要走 DevOpsPad 发布流程并经负责人同意。
@@ -50,6 +66,12 @@ wails3 dev
 注意：后端必须经过 `/api` 前缀访问（生产环境 `https://sitemoment.com/api`），因为确认页登录会 POST 到 `/api/auth/desktop/approve`；一个没有 nginx 之类反向代理剥离 `/api` 的裸本地后端无法完成登录。
 
 **Bing Webmaster API key**：Bing Webmaster Tools → 右上角设置 → API 访问 → 生成 API key，复制到 SiteMoment 的「设置 → Bing Webmaster」。
+
+**采集器手工检查**（会打开一个隐藏窗口查一次谷歌；遇到验证码会弹出窗口，需要人来处理，程序不会自动处理）：
+
+    SITEMOMENT_DATA_DIR=/tmp/smd-check go run ./cmd/collect-check -c google-serp -q "thumbnail maker"
+
+**自己的模型 key**：设置 → AI 模型，选「OpenAI 兼容接口」（填 base URL，如 `https://api.openai.com/v1`、模型名和 key）或「Anthropic」（填 key，模型默认 `claude-opus-5`），点「测试连接」。不登录 SiteMoment 也能用。
 
 ## 开发
 

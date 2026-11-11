@@ -1,0 +1,13 @@
+{
+  "id": "google-serp",
+  "name": "谷歌搜索结果",
+  "version": "1.0.0",
+  "tool": "google_serp",
+  "hosts": ["www.google.com"],
+  "url": "https://www.google.com/search?q={q}&gl={gl}&hl={hl}&num=10&pws=0",
+  "cacheHours": 168,
+  "minGapSeconds": 10,
+  "jitterSeconds": 8,
+  "dailyLimit": 200,
+  "timeoutSeconds": 60
+}

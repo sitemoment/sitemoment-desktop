@@ -1,8 +1,9 @@
 import { fmtBytes, fmtCredits, fmtTime } from "../format";
-import type { Account, Info, SyncProgress, SyncStatus } from "../types";
+import type { Account, CollectorStats, Info, SyncProgress, SyncStatus } from "../types";
 
-export function StatusBar({ status, progress, info, siteId, account }: {
+export function StatusBar({ status, progress, info, siteId, account, collect }: {
   status?: SyncStatus; progress: SyncProgress | null; info: Info | null; siteId?: number; account?: Account | null;
+  collect?: CollectorStats | null;
 }) {
   let left = "未同步";
   const ownProgress = progress && progress.siteId === siteId ? progress : null;
@@ -16,6 +17,10 @@ export function StatusBar({ status, progress, info, siteId, account }: {
   return (
     <div className="statusbar">
       <span>{left}</span>
+      {collect && (collect.running > 0 || collect.queued > 0) && (
+        <span>{collect.running > 0 && <i className="spin" />} 采集器运行 {collect.running}，排队 {collect.queued}</span>
+      )}
+      {collect?.today.filter((d) => d.count > 0).map((d) => <span key={d.collector}>{d.name} {d.count} / {d.limit}</span>)}
       <span className="right">
         {info && <span>SQLite {fmtBytes(info.dbBytes)}</span>}
         {account?.signedIn && account.creditsLimit > 0 && (

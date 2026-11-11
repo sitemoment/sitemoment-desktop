@@ -1,4 +1,4 @@
-import type { BingSite, GAProperty, KeywordKind, Metric, Property } from "./types";
+import type { BingSite, GAProperty, KeywordKind, Metric, Property, RunView } from "./types";
 
 export const fmtInt = (n: number) => Math.round(n).toLocaleString("en-US");
 
@@ -103,4 +103,14 @@ export function guessBingSite(sites: BingSite[], host: string): string {
     }
   };
   return sites.find((s) => hostOf(s.url) === bareHost(host))?.url ?? "";
+}
+
+/**
+ * The collector run waiting for a human check, after run changed: a run that
+ * needs a human replaces the current one; the current one clears once it
+ * moves on (solved, failed or cancelled).
+ */
+export function nextHumanRun(cur: RunView | null, run: RunView): RunView | null {
+  if (run.status === "need_human") return run;
+  return cur && cur.id === run.id ? null : cur;
 }

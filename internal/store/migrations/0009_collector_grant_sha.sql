@@ -1,0 +1,1 @@
+ALTER TABLE collector_grants ADD COLUMN sha TEXT NOT NULL DEFAULT '';

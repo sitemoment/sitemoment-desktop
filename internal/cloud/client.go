@@ -157,9 +157,7 @@ func (c *Client) authed(ctx context.Context, method, path string, body, out any)
 		}
 		status, err := c.do(ctx, method, path, tok, body, out)
 		if status == http.StatusUnauthorized {
-			c.mu.Lock()
-			c.access = ""
-			c.mu.Unlock()
+			c.ResetAccess()
 			continue
 		}
 		return err

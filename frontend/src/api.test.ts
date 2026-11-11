@@ -47,6 +47,15 @@ describe("errText", () => {
     expect(errText(new Error("cloud: HTTP 429 rate_limited: too many SERP lookups today"))).toBe("今天的数据请求次数已用完，请明天再试");
     expect(errText(new Error("cloud: HTTP 429 too_many_requests: slow down"))).toBe("请等上一个取数完成");
   });
+  it("tells hosted-model credit exhaustion apart", () => {
+    expect(errText(new Error("llm: HTTP 402: This month's SiteMoment credits cannot cover this call (credits_exhausted)"))).toBe(
+      "本月 SiteMoment 额度已用完，可以在设置 → AI 模型里改用自己的 key",
+    );
+  });
+  it("passes through the model's own truncation and interruption messages", () => {
+    expect(errText(new Error("llm: 模型回复太长，已中止"))).toBe("模型回复太长，已中止");
+    expect(errText(new Error("llm: 模型回复中断"))).toBe("模型回复中断");
+  });
   it("stringifies a non-Error value", () => {
     expect(errText("plain string")).toBe("plain string");
   });

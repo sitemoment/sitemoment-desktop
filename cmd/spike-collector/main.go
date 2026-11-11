@@ -139,7 +139,7 @@ func main() {
 			return
 		}
 		log.Printf("navigation finished; injecting run %s", cur.ID)
-		win.ExecJS(collect.Script(cur, serpJS))
+		win.ExecJS(collect.Script(cur, serpJS, nil))
 	})
 	time.AfterFunc(3*time.Minute, func() { log.Printf("timeout"); app.Quit() })
 

@@ -1,15 +1,18 @@
 import { CancelError } from "@wailsio/runtime";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, errText, isNetworkError, onEvent } from "./api";
+import { AgentPanel } from "./agent/AgentPanel";
 import { AddSite } from "./components/AddSite";
 import { SitesPanel } from "./components/SitesPanel";
 import { StatusBar } from "./components/StatusBar";
+import { CollectorsPage } from "./pages/Collectors";
 import { KeywordsPage } from "./pages/Keywords";
 import { OverviewPage } from "./pages/Overview";
 import { SettingsPage } from "./pages/Settings";
-import type { Account, Info, Site, SyncProgress, SyncStatus } from "./types";
+import { nextHumanRun } from "./format";
+import type { Account, CollectorStats, Info, RunView, Site, SyncProgress, SyncStatus } from "./types";
 
-type Page = "overview" | "keywords" | "settings";
+type Page = "overview" | "keywords" | "collectors" | "settings";
 
 export default function App() {
   const [account, setAccount] = useState<Account | null>(null);
@@ -19,9 +22,13 @@ export default function App() {
   const [statuses, setStatuses] = useState<Record<number, SyncStatus>>({});
   const [progress, setProgress] = useState<Record<number, SyncProgress>>({});
   const [info, setInfo] = useState<Info | null>(null);
+  const [collect, setCollect] = useState<CollectorStats | null>(null);
+  const [human, setHuman] = useState<RunView | null>(null);
   const [adding, setAdding] = useState(false);
   const [error, setError] = useState("");
   const [loggingIn, setLoggingIn] = useState(false);
+  const [modelRev, setModelRev] = useState(0);
+  const [agentOpen, setAgentOpen] = useState(() => localStorage.getItem("agentOpen") !== "0");
   // Login can block up to 5 minutes if the user abandons the browser; keep the
   // cancellable promise around so the sidebar button can cancel it.
   const loginRef = useRef<ReturnType<typeof api.login> | null>(null);
@@ -58,9 +65,14 @@ export default function App() {
     const offProgress = onEvent<SyncProgress>("sync:progress", (p) => {
       setProgress((m) => ({ ...m, [p.siteId]: p }));
     });
+    api.collectorStats().then(setCollect).catch(() => {});
+    const offCollect = onEvent<CollectorStats>("collect:stats", setCollect);
+    const offRun = onEvent<RunView>("collect:run", (r) => setHuman((cur) => nextHumanRun(cur, r)));
     return () => {
       offStatus();
       offProgress();
+      offCollect();
+      offRun();
     };
   }, [reloadSites]);
 
@@ -84,37 +96,58 @@ export default function App() {
     });
   };
 
+  const toggleAgent = () => setAgentOpen((o) => {
+    localStorage.setItem("agentOpen", o ? "0" : "1");
+    return !o;
+  });
+  const refreshAccount = useCallback(() => { api.account().then(setAccount).catch(() => {}); }, []);
+
   const site = sites.find((s) => s.id === siteId) ?? null;
   return (
     <div className="window">
-      <div className="titlebar"><span className="cmd">SiteMoment · {site?.host ?? "本地 SEO 运营"}</span></div>
+      <div className="titlebar">
+        <span className="cmd">SiteMoment · {site?.host ?? "本地 SEO 运营"}</span>
+        <button className={"agent-toggle" + (agentOpen ? " on" : "")} title={agentOpen ? "收起 Agent" : "打开 Agent"} onClick={toggleAgent}>Agent ◨</button>
+      </div>
       <div className="body">
         <nav className="rail">
           <button className={page === "overview" ? "on" : ""} title="概览" aria-label="概览" onClick={() => setPage("overview")}>◧</button>
           <button className={page === "keywords" ? "on" : ""} title="关键词" aria-label="关键词" onClick={() => setPage("keywords")}>⌕</button>
+          <button className={page === "collectors" ? "on" : ""} title="采集器" aria-label="采集器" onClick={() => setPage("collectors")}>⧉</button>
           <button className={"bottom" + (page === "settings" ? " on" : "")} title="设置" aria-label="设置" onClick={() => setPage("settings")}>⚙</button>
         </nav>
         <SitesPanel sites={sites} selected={siteId} statuses={statuses} account={account} loggingIn={loggingIn}
-          onSelect={(id) => { setSiteId(id); setPage((p) => (p === "settings" ? "overview" : p)); }} onAdd={() => setAdding(true)} onLogin={login} />
+          onSelect={(id) => { setSiteId(id); setPage((p) => (p === "settings" || p === "collectors" ? "overview" : p)); }} onAdd={() => setAdding(true)} onLogin={login} />
         <main>
           <div className="tabs">
             <span className={page === "overview" ? "on" : ""}>{site ? `概览 · ${site.host}` : "概览"}</span>
             <span className={page === "keywords" ? "on" : ""}>关键词</span>
+            <span className={page === "collectors" ? "on" : ""}>采集器</span>
             <span className={page === "settings" ? "on" : ""}>设置</span>
           </div>
           {error && <div className="toolbar error">{error}</div>}
-          {page === "settings" ? (
-            <SettingsPage account={account} info={info} sites={sites} onAccount={setAccount} onLogin={login} onSitesChanged={reloadSites} />
+          {human && (
+            <div className="toolbar notice">
+              <span className="grow">本机浏览器在查「{human.collector}」时遇到人工验证：请在弹出的窗口里完成，2 分钟内有效。</span>
+              <button className="btn" onClick={() => api.revealRun(human.id).catch(() => setHuman(null))}>显示窗口</button>
+            </div>
+          )}
+          {page === "collectors" ? (
+            <CollectorsPage />
+          ) : page === "settings" ? (
+            <SettingsPage account={account} info={info} sites={sites} onAccount={setAccount} onLogin={login} onSitesChanged={reloadSites}
+              onModelChanged={() => setModelRev((n) => n + 1)} />
           ) : !site ? (
             <div className="content"><div className="empty">还没有站点。<button className="btn primary" onClick={() => setAdding(true)}>添加第一个站点</button></div></div>
           ) : page === "keywords" ? (
-            <KeywordsPage key={site.id} site={site} account={account} onCreditsUsed={() => api.account().then(setAccount).catch(() => {})} />
+            <KeywordsPage key={site.id} site={site} account={account} onCreditsUsed={refreshAccount} />
           ) : (
             <OverviewPage key={site.id} site={site} status={statuses[site.id]} onChanged={reloadSites} />
           )}
         </main>
+        {agentOpen && <AgentPanel site={site} account={account} modelRev={modelRev} onOpenSettings={() => setPage("settings")} onCreditsUsed={refreshAccount} />}
       </div>
-      <StatusBar status={site ? statuses[site.id] : undefined} progress={site ? progress[site.id] ?? null : null} info={info} siteId={site?.id} account={account} />
+      <StatusBar status={site ? statuses[site.id] : undefined} progress={site ? progress[site.id] ?? null : null} info={info} siteId={site?.id} account={account} collect={collect} />
       {adding && (
         <AddSite onCancel={() => setAdding(false)} onDone={async (s) => { setAdding(false); await reloadSites(); setSiteId(s.id); setPage("overview"); }} />
       )}
