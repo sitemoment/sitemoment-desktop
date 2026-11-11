@@ -1,6 +1,6 @@
 import { CancelError } from "@wailsio/runtime";
 import { useEffect, useRef, useState } from "react";
-import { api, errText, type Cancellable } from "../api";
+import { api, errText, signedOut, type Cancellable } from "../api";
 import { fmtBytes } from "../format";
 import type { Account, Connection, Info, Site } from "../types";
 
@@ -38,7 +38,7 @@ export function SettingsPage(props: {
     setErr("");
     try { await fn(); } catch (e) { setErr(errText(e)); } finally { setBusy(false); }
   };
-  const logout = guard(async () => { await api.logout(); props.onAccount({ signedIn: false, email: "", name: "", avatarUrl: "", plan: "" }); });
+  const logout = guard(async () => { await api.logout(); props.onAccount(signedOut); });
   const connect = () => {
     if (connectRef.current) {
       connectRef.current.cancel();

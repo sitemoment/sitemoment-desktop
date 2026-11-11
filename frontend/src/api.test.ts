@@ -28,6 +28,21 @@ describe("errText", () => {
       "gscsync: site has no Search Console property",
     );
   });
+  it("translates Bing, Analytics, sign-in and keyword errors", () => {
+    expect(errText(new Error("这不像是 Bing Webmaster 的 API key: bing: the API key is not valid"))).toBe("Bing API key 无效，请检查后重新添加");
+    expect(errText(new Error("bing: Bing Webmaster is throttling this key, try again later"))).toBe("Bing 暂时限流，请稍后再试");
+    expect(errText(new Error("bing: this key cannot read that site"))).toBe("这个 Bing key 读不到该站点");
+    expect(errText(new Error("google: Analytics access was not granted, connect the account again and allow it"))).toBe(
+      "没有授予 Google Analytics 读取权限，请重新连接 Google 账号并勾选",
+    );
+    expect(errText(new Error("cloud: not signed in"))).toBe("请先登录 SiteMoment");
+    expect(errText(new Error("store: a keyword is 1 to 200 characters"))).toBe("关键词不能为空，最长 200 个字符");
+  });
+  it("translates paid data API error codes", () => {
+    expect(errText(new Error("cloud: HTTP 402 credits_exhausted: not enough credits"))).toBe("本月额度已用完");
+    expect(errText(new Error("cloud: HTTP 400 request_too_large: 这次请求太大，请减少关键词数量或 limit"))).toBe("这次请求太大，请减少关键词数量");
+    expect(errText(new Error("cloud: SiteMoment data is not available right now (data_budget)"))).toBe("数据服务今天的总额度已用完，请明天再试");
+  });
   it("stringifies a non-Error value", () => {
     expect(errText("plain string")).toBe("plain string");
   });

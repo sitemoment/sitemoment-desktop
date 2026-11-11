@@ -1,8 +1,10 @@
 import { Events, type CancellablePromise } from "@wailsio/runtime";
 import {
-  AccountService, GoogleService, InfoService, OverviewService, SiteService, SyncService,
+  AccountService, BingService, GoogleService, InfoService, KeywordService, OverviewService, SiteService, SyncService,
 } from "../bindings/github.com/sitemoment/sitemoment-desktop/internal/app";
-import type { Account, Connection, Info, Overview, Property, Site, SyncStatus } from "./types";
+import type {
+  Account, BingSite, CloudQuote, Connection, FetchResult, GAProperty, Info, KeywordKind, KeywordList, Overview, Property, Site, SyncStatus,
+} from "./types";
 
 // The generated bindings (typed via `wails3 generate bindings -ts -i`) return
 // CancellablePromise of generated model types that are structurally the same
@@ -19,6 +21,11 @@ export interface Cancellable<T> extends PromiseLike<T> {
   cancel(cause?: unknown): CancellablePromise<void>;
 }
 
+/** The account shown when nobody is signed in. */
+export const signedOut: Account = {
+  signedIn: false, email: "", name: "", avatarUrl: "", plan: "", creditsMonth: "", creditsUsed: 0, creditsLimit: 0,
+};
+
 export const api = {
   account: () => call<Account>(AccountService.Get()),
   login: () => AccountService.Login() as Cancellable<Account>,
@@ -28,13 +35,27 @@ export const api = {
   connections: () => call<Connection[]>(GoogleService.Connections()),
   disconnectGoogle: (account: string) => call<void>(GoogleService.Disconnect(account)),
   properties: (account: string) => call<Property[]>(GoogleService.Properties(account)),
+  gaProperties: (account: string) => call<GAProperty[]>(GoogleService.GAProperties(account)),
+  bingKeys: () => call<Connection[]>(BingService.Keys()),
+  addBingKey: (key: string) => call<Connection>(BingService.AddKey(key)),
+  removeBingKey: (account: string) => call<void>(BingService.RemoveKey(account)),
+  bingSites: (account: string) => call<BingSite[]>(BingService.Sites(account)),
   sites: () => call<Site[]>(SiteService.List()),
   addSite: (host: string) => call<Site>(SiteService.Add(host)),
   removeSite: (id: number) => call<void>(SiteService.Remove(id)),
   bindGSC: (id: number, account: string, property: string) => call<void>(SiteService.BindGSC(id, account, property)),
+  bindGA: (id: number, account: string, property: string) => call<void>(SiteService.BindGA(id, account, property)),
+  bindBing: (id: number, account: string, siteUrl: string) => call<void>(SiteService.BindBing(id, account, siteUrl)),
   syncNow: (id: number) => call<void>(SyncService.SyncNow(id)),
   syncStatuses: () => call<SyncStatus[]>(SyncService.Statuses()),
   overview: (id: number, days: number) => call<Overview>(OverviewService.Get(id, days)),
+  keywords: (siteId: number, kind: "" | KeywordKind) => call<KeywordList>(KeywordService.List(siteId, kind)),
+  addKeywords: (siteId: number, text: string, kind: KeywordKind) => call<number>(KeywordService.Add(siteId, text, kind)),
+  updateKeyword: (id: number, kind: KeywordKind, notes: string) => call<void>(KeywordService.Update(id, kind, notes)),
+  removeKeyword: (id: number) => call<void>(KeywordService.Remove(id)),
+  fetchBing: (siteId: number, ids: number[]) => call<FetchResult>(KeywordService.FetchBing(siteId, ids)),
+  quoteCloud: (siteId: number, ids: number[]) => call<CloudQuote>(KeywordService.QuoteCloud(siteId, ids)),
+  fetchCloud: (siteId: number, ids: number[]) => call<FetchResult>(KeywordService.FetchCloud(siteId, ids)),
   info: () => call<Info>(InfoService.Get()),
 };
 
@@ -46,13 +67,22 @@ export function onEvent<T>(name: string, fn: (data: T) => void): () => void {
 /** Matches Go net package errors such as "dial tcp ...", "no such host", and client timeouts. */
 export const isNetworkError = (msg: string) => /dial tcp|no such host|timeout/.test(msg);
 
-/** Translates known Go error messages (oauthx, google, net) into Chinese for the UI; anything else passes through unchanged. */
+/** Translates known Go error messages into Chinese for the UI; anything else passes through unchanged. */
 export const errText = (e: unknown) => {
   const msg = e instanceof Error ? e.message : String(e);
   if (msg.includes("access_denied")) return "已取消登录";
   if (msg.includes("state mismatch")) return "登录请求不匹配，请重试";
   if (msg.includes("Search Console access was not granted")) return "没有授予 Search Console 读取权限，请重新连接并勾选";
+  if (msg.includes("Analytics access was not granted")) return "没有授予 Google Analytics 读取权限，请重新连接 Google 账号并勾选";
   if (msg.includes("authorization expired, connect the account again")) return "Google 授权已失效，请重新连接";
+  if (msg.includes("bing: the API key is not valid")) return "Bing API key 无效，请检查后重新添加";
+  if (msg.includes("bing: Bing Webmaster is throttling")) return "Bing 暂时限流，请稍后再试";
+  if (msg.includes("bing: this key cannot read that site")) return "这个 Bing key 读不到该站点";
+  if (msg.includes("cloud: not signed in")) return "请先登录 SiteMoment";
+  if (msg.includes("store: a keyword is 1 to 200 characters")) return "关键词不能为空，最长 200 个字符";
+  if (msg.includes("credits_exhausted")) return "本月额度已用完";
+  if (msg.includes("request_too_large")) return "这次请求太大，请减少关键词数量";
+  if (msg.includes("data_budget")) return "数据服务今天的总额度已用完，请明天再试";
   if (isNetworkError(msg)) return "网络连接失败，请检查网络";
   return msg;
 };

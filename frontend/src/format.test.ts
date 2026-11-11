@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { change, fmtBytes, fmtCompact, fmtPct, guessProperty, niceScale, posChange } from "./format";
+import {
+  change, fmtBytes, fmtCompact, fmtCredits, fmtPct, guessBingSite, guessGAProperty, guessProperty, kdClass, metricNote, niceScale, posChange,
+} from "./format";
 
 describe("format", () => {
   it("compacts big numbers", () => {
@@ -41,5 +43,38 @@ describe("format", () => {
     expect(guessProperty(props, "blog.example.com")).toBe("https://blog.example.com/");
     expect(guessProperty(props, "other.org")).toBe("https://blog.example.com/");
     expect(guessProperty([], "other.org")).toBe("");
+  });
+});
+
+describe("M2 formatting", () => {
+  it("formats credits without useless decimals", () => {
+    expect(fmtCredits(312)).toBe("312");
+    expect(fmtCredits(3000)).toBe("3,000");
+    expect(fmtCredits(0.5)).toBe("0.5");
+    expect(fmtCredits(1234.5)).toBe("1,234.5");
+  });
+  it("notes where a keyword number came from", () => {
+    expect(metricNote({ value: 1900, source: "sitemoment", at: 1790000000 })).toBe("SiteMoment · 2026-09-21");
+    expect(metricNote({ value: 180, source: "bing", at: 1790000000 })).toBe("Bing 近 4 周 · 2026-09-21");
+    expect(metricNote({ value: null, source: "", at: 0 })).toBe("");
+  });
+  it("colours KD by difficulty", () => {
+    expect(kdClass(12)).toBe("st-good");
+    expect(kdClass(45)).toBe("st-warn");
+    expect(kdClass(80)).toBe("st-bad");
+    expect(kdClass(null)).toBe("");
+  });
+  it("guesses the GA4 property and Bing site for a host", () => {
+    const props = [
+      { property: "properties/1", displayName: "Other", account: "accounts/1", accountName: "A" },
+      { property: "properties/2", displayName: "example.com - GA4", account: "accounts/1", accountName: "A" },
+    ];
+    expect(guessGAProperty(props, "www.example.com")).toBe("properties/2");
+    expect(guessGAProperty(props, "nothing.org")).toBe("properties/1");
+    expect(guessGAProperty([], "x.org")).toBe("");
+    const sites = [{ url: "https://blog.example.com/", verified: true }, { url: "https://www.example.com/", verified: true }];
+    expect(guessBingSite(sites, "example.com")).toBe("https://www.example.com/");
+    expect(guessBingSite(sites, "blog.example.com")).toBe("https://blog.example.com/");
+    expect(guessBingSite(sites, "other.org")).toBe("");
   });
 });

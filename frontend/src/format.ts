@@ -1,4 +1,4 @@
-import type { Property } from "./types";
+import type { BingSite, GAProperty, KeywordKind, Metric, Property } from "./types";
 
 export const fmtInt = (n: number) => Math.round(n).toLocaleString("en-US");
 
@@ -65,4 +65,42 @@ export function guessProperty(props: Property[], host: string): string {
   for (const w of want) if (props.some((p) => p.siteUrl === w)) return w;
   const loose = props.find((p) => p.siteUrl.includes(bare));
   return loose?.siteUrl ?? props[0]?.siteUrl ?? "";
+}
+
+/** Credits with thousands separators and at most one decimal: 3000 → "3,000", 0.5 → "0.5". */
+export const fmtCredits = (n: number) => n.toLocaleString("en-US", { maximumFractionDigits: 1 });
+
+export const kindLabel: Record<KeywordKind, string> = { target: "目标词", found: "意外流量", scene: "场景词" };
+
+/** Where and when a keyword number came from, e.g. "Bing 近 4 周 · 2026-11-10" (UTC date). */
+export function metricNote(m: Metric): string {
+  if (m.value == null || !m.source) return "";
+  const src = m.source === "bing" ? "Bing 近 4 周" : "SiteMoment";
+  return `${src} · ${new Date(m.at * 1000).toISOString().slice(0, 10)}`;
+}
+
+/** Colour class for a KD from 0 to 100: easy, medium, hard. */
+export function kdClass(kd: number | null): string {
+  if (kd == null) return "";
+  return kd < 30 ? "st-good" : kd < 60 ? "st-warn" : "st-bad";
+}
+
+const bareHost = (h: string) => h.replace(/^www\./, "").toLowerCase();
+
+/** The GA4 property whose name mentions host, else the first one. */
+export function guessGAProperty(props: GAProperty[], host: string): string {
+  const bare = bareHost(host);
+  return (props.find((p) => p.displayName.toLowerCase().includes(bare)) ?? props[0])?.property ?? "";
+}
+
+/** The Bing site that is host (with or without www), else "". */
+export function guessBingSite(sites: BingSite[], host: string): string {
+  const hostOf = (u: string) => {
+    try {
+      return bareHost(new URL(u).hostname);
+    } catch {
+      return "";
+    }
+  };
+  return sites.find((s) => hostOf(s.url) === bareHost(host))?.url ?? "";
 }
