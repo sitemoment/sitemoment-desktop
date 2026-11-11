@@ -156,6 +156,9 @@ func Validate(conds []Condition, site store.Site) ([]Condition, error) {
 			if c.Value < 0 {
 				return nil, bad("value 不能是负数")
 			}
+			if c.Metric == "ctr" && c.Value > 1 {
+				c.Value = 1 // CTR is a 0-1 fraction; a target above 100% could never pass
+			}
 			c.Status = 0
 		default:
 			return nil, bad("未知的条件类型 %q（可选 keyword_position、url_status、page_indexed、metric）", c.Kind)

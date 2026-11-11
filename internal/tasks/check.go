@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"strings"
 	"time"
 
 	"github.com/sitemoment/sitemoment-desktop/internal/store"
@@ -188,6 +189,13 @@ func (s *Service) checkIndexed(ctx context.Context, site store.Site, t store.Tas
 		return Outcome{State: StatePending, Note: "这个站点没有绑定 Search Console，不能检查收录"}
 	}
 	p, err := s.Store.Page(ctx, site.ID, c.URL)
+	if errors.Is(err, store.ErrNotFound) {
+		// The health check may have remembered the page with (or without) a
+		// trailing slash that the condition's URL does not have.
+		if alt, aerr := s.Store.Page(ctx, site.ID, slashVariant(c.URL)); aerr == nil {
+			p, err = alt, nil
+		}
+	}
 	if errors.Is(err, store.ErrNotFound) || (err == nil && p.IndexCheckedAt == 0) {
 		return Outcome{State: StatePending, Note: "等下一次体检用 Search Console 网址检查"}
 	}
@@ -211,4 +219,12 @@ func (s *Service) checkIndexed(ctx context.Context, site store.Site, t store.Tas
 		reason = p.IndexVerdict
 	}
 	return Outcome{State: StateUnmet, Note: reason + "（网址检查 " + when + "）"}
+}
+
+// slashVariant toggles a URL's trailing slash, for a tolerant second lookup.
+func slashVariant(u string) string {
+	if strings.HasSuffix(u, "/") {
+		return strings.TrimSuffix(u, "/")
+	}
+	return u + "/"
 }

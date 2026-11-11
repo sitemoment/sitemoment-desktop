@@ -240,29 +240,45 @@ func (c *crawler) crawlable(raw string) bool {
 	return !skipExt[path.Ext(p)] && !strings.HasPrefix(p, "/cdn-cgi/")
 }
 
+// blockEverything stands in for a robots.txt our crawler could not read at
+// all (RFC 9309 §2.3.1.4: an unreachable robots.txt means "crawl nothing").
+func blockEverything() *robotsInfo {
+	return &robotsInfo{groups: []robotsGroup{{agents: []string{"*"}, rules: []robotsRule{newRobotsRule(false, "/")}}}}
+}
+
 func (c *crawler) readSitemaps(ctx context.Context, origin *url.URL) {
 	var candidates []string
 	r, err := c.f.Get(ctx, origin.String()+"/robots.txt")
+	reason := ""
 	if err != nil {
-		c.res.RobotsError = "fetch_failed"
+		reason = "fetch_failed"
 		if fe, ok := err.(*FetchError); ok {
-			c.res.RobotsError = fe.Reason
+			reason = fe.Reason
 		}
-	} else {
+	}
+	switch {
+	case reason == "redirects":
+		// Too many redirects following robots.txt: treat it as absent
+		// (everything allowed), not as a hard failure that blocks the crawl.
+	case reason != "":
+		c.res.RobotsError = reason
+		c.res.robots = blockEverything()
+		return // nothing may be crawled, so there is no point looking for a sitemap either
+	default:
 		c.res.RobotsStatus = r.StatusCode
-	}
-	if c.res.RobotsError != "" || c.res.RobotsStatus >= 500 {
-		// RFC 9309 §2.3.1.4: an unreachable robots.txt means "crawl nothing".
-		c.res.robots = &robotsInfo{groups: []robotsGroup{{agents: []string{"*"}, rules: []robotsRule{{pattern: "/"}}}}}
-	}
-	if err == nil && r.StatusCode >= 200 && r.StatusCode < 300 {
-		c.res.RobotsTxt = true
-		ri := parseRobots(r.Body)
-		c.res.robots = &ri
-		c.res.RobotsBlocksRoot = ri.blocksRoot
-		for _, s := range ri.sitemaps {
-			if u, err := url.Parse(s); err == nil && hostKey(u.Hostname()) == hostKey(origin.Hostname()) {
-				candidates = append(candidates, s)
+		if r.StatusCode >= 500 {
+			c.res.robots = blockEverything()
+			return
+		}
+		if r.StatusCode >= 200 && r.StatusCode < 300 {
+			c.res.RobotsTxt = true
+			ri := parseRobots(r.Body)
+			c.res.robots = &ri
+			c.res.RobotsBlocksRoot = ri.blocksRoot
+			for _, s := range ri.sitemaps {
+				if u, err := url.Parse(s); err == nil && hostKey(u.Hostname()) == hostKey(origin.Hostname()) {
+					candidates = append(candidates, s)
+				}
 			}
 		}
 	}

@@ -72,12 +72,15 @@ func TestBuildWeeklyReport(t *testing.T) {
 		"| GA4 会话 | 150 | 100 | +50.0% |",
 		"| 健康分 | 73 | — | — |",
 		"| thumbnail maker | 30 | 5 | +25 | 9.0 |",
-		"| old <b>query</b> ｜ x | 0 | 8 | -8 | — |",
+		// cell() neutralizes Markdown/HTML metacharacters from GSC/agent text with
+		// full-width lookalikes, so a third-party Markdown reader of the exported
+		// .md file cannot turn "<b>" into live HTML or "<!--" into a comment.
+		"| old ＜b＞query＜/b＞ ｜ x | 0 | 8 | -8 | — |",
 		"| youtube banner size | 120 | 1 | 11.4 |",
 		"- **P0** 以前正常、现在报错的页面（2） · 新",
 		"- 另有 1 类 P2 问题",
 		"- · 首页标题改成主打 thumbnail maker（到期 2026-11-12）",
-		"「thumbnail maker」近 28 天平均排名 < 10：",
+		"「thumbnail maker」近 28 天平均排名 ＜ 10：",
 		"1. 先处理 P0：「以前正常、现在报错的页面」（2）。",
 		"任务「首页标题改成主打 thumbnail maker」11-12 到期",
 	} {
@@ -87,7 +90,7 @@ func TestBuildWeeklyReport(t *testing.T) {
 	}
 	h := r.HTML
 	for _, want := range []string{"<svg", "每日 GSC 点击", "<title>2026-11-08：20 次点击，400 次展示</title>", `<div class="k">GSC 点击</div><div class="v">140</div>`,
-		"<td>old &lt;b&gt;query&lt;/b&gt; ｜ x</td>", "<h2>体检</h2>", "<strong>P0</strong>"} {
+		"<td>old ＜b＞query＜/b＞ ｜ x</td>", "<h2>体检</h2>", "<strong>P0</strong>"} {
 		if !strings.Contains(h, want) {
 			t.Errorf("html lacks %q", want)
 		}
@@ -123,6 +126,36 @@ func TestMarkdownToHTML(t *testing.T) {
 		"<table><thead><tr><th>A</th><th>B</th></tr></thead><tbody><tr><td>&lt;x&gt;</td><td>[l](javascript:x)</td></tr></tbody></table>", "<p>text &amp; more</p>"}, "\n")
 	if got != want {
 		t.Fatalf("got\n%s\nwant\n%s", got, want)
+	}
+}
+
+func TestMdToHTMLKeepsArbitraryComments(t *testing.T) {
+	// Only the literal chart marker is special; any other "<!-- -->" in the
+	// text (e.g. from a GSC query) must be escaped and shown, not silently
+	// dropped by a generic comment-stripping regex.
+	got := mdToHTML("before <!-- not the chart marker --> after")
+	if !strings.Contains(got, "&lt;!-- not the chart marker --&gt;") {
+		t.Fatalf("an arbitrary HTML comment must be escaped, not stripped: %q", got)
+	}
+}
+
+func TestCellNeutralizesMarkdownAndHTMLMetacharacters(t *testing.T) {
+	got := cell("a | b\nc <!-- x --> <b>bold</b> [link](javascript:x)")
+	for _, bad := range []string{"|", "\n", "<!--", "<", ">", "[", "]", "(", ")"} {
+		if strings.Contains(got, bad) {
+			t.Fatalf("cell(%q) = %q still contains %q", "a | b\\nc...", got, bad)
+		}
+	}
+}
+
+func TestClicksChartGuardsDayLabels(t *testing.T) {
+	days := []store.DayPoint{
+		{Day: "x", Clicks: 1, Impressions: 2},                 // shorter than len("YYYY-MM-DD"): must not panic
+		{Day: "2026-11-08<script>", Clicks: 3, Impressions: 4}, // must be escaped, not injected raw into the SVG
+	}
+	got := clicksChart(days, "2026-11-01")
+	if strings.Contains(got, "<script>") {
+		t.Fatalf("a day label must be HTML-escaped: %s", got)
 	}
 }
 

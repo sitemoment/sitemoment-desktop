@@ -71,11 +71,12 @@ func orSelf(c string) string {
 }
 
 // unseenOK lists pages with a history of being OK (LastOK > 0, within
-// lostRetention) that this crawl did not reach, at most limit. A page keeps
-// being traced (and so keeps being reportable as lost) on every check for
-// as long as it is within that window, not just the first time it goes
-// missing. Pages robots.txt now disallows are left out: rechecking them
-// would fetch a URL our crawler itself would skip.
+// lostRetention) that this crawl did not reach, oldest LastSeen first (the
+// ones most overdue for a recheck), at most limit. A page keeps being
+// traced (and so keeps being reportable as lost) on every check for as long
+// as it is within that window, not just the first time it goes missing.
+// Pages robots.txt now disallows are left out: rechecking them would fetch
+// a URL our crawler itself would skip.
 func unseenOK(prev map[string]store.Page, res *rank.CrawlResult, limit int, now int64) []string {
 	cutoff := now - lostRetention
 	crawled := make(map[string]bool, len(res.Pages))
@@ -88,7 +89,7 @@ func unseenOK(prev map[string]store.Page, res *rank.CrawlResult, limit int, now 
 			out = append(out, u)
 		}
 	}
-	sort.Strings(out)
+	sort.Slice(out, func(i, j int) bool { return prev[out[i]].LastSeen < prev[out[j]].LastSeen })
 	if len(out) > limit {
 		out = out[:limit]
 	}

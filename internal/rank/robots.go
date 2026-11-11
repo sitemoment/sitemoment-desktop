@@ -26,13 +26,45 @@ type robotsGroup struct {
 type robotsRule struct {
 	allow   bool
 	pattern string
+	// re is pattern compiled once, at parse time (RFC 9309 §2.2.3: "*" is
+	// any run of characters, a trailing "$" anchors the end).
+	re *regexp.Regexp
 }
+
+// newRobotsRule builds a rule with its matcher precompiled, so allowed does
+// not recompile a regexp for every rule on every URL it checks.
+func newRobotsRule(allow bool, pattern string) robotsRule {
+	anchored := strings.HasSuffix(pattern, "$")
+	parts := strings.Split(strings.TrimSuffix(pattern, "$"), "*")
+	for i := range parts {
+		parts[i] = regexp.QuoteMeta(parts[i])
+	}
+	expr := "^" + strings.Join(parts, ".*")
+	if anchored {
+		expr += "$"
+	}
+	re, _ := regexp.Compile(expr) // every part is QuoteMeta'd: this always compiles
+	return robotsRule{allow: allow, pattern: pattern, re: re}
+}
+
+const (
+	// maxRobotsBytes matches Google's own robots.txt parser: anything past
+	// the first 500 KiB of the file is ignored.
+	maxRobotsBytes = 500 << 10
+	// maxRobotsLineBytes bounds a single line; no real directive needs more.
+	maxRobotsLineBytes = 256 << 10
+)
 
 // parseRobots reads robots.txt (RFC 9309). Only the group for "*" decides
 // blocksRoot: it blocks the root when it has "Disallow: /" (or "/*") and no
-// "Allow: /".
+// "Allow: /". Anything past the first maxRobotsBytes is ignored; a line
+// over maxRobotsLineBytes stops the scan, keeping whatever was parsed so
+// far rather than failing outright.
 func parseRobots(body []byte) robotsInfo {
 	body = bytes.TrimPrefix(body, []byte("\xEF\xBB\xBF")) // a leading UTF-8 BOM would otherwise glue onto "User-agent" and hide the first group
+	if len(body) > maxRobotsBytes {
+		body = body[:maxRobotsBytes]
+	}
 	var out robotsInfo
 	var (
 		inStar, prevAgent bool
@@ -41,7 +73,7 @@ func parseRobots(body []byte) robotsInfo {
 		cur               *robotsGroup
 	)
 	sc := bufio.NewScanner(bytes.NewReader(body))
-	sc.Buffer(make([]byte, 0, 64<<10), 1<<20)
+	sc.Buffer(make([]byte, 0, 64<<10), maxRobotsLineBytes)
 	for sc.Scan() {
 		line := sc.Text()
 		if i := strings.IndexByte(line, '#'); i >= 0 {
@@ -82,11 +114,14 @@ func parseRobots(body []byte) robotsInfo {
 			}
 			// An empty Disallow allows everything: it is no rule at all.
 			if cur != nil && val != "" {
-				cur.rules = append(cur.rules, robotsRule{allow: key == "allow", pattern: percentNormalize(val)})
+				cur.rules = append(cur.rules, newRobotsRule(key == "allow", percentNormalize(val)))
 			}
 		}
 		prevAgent = false
 	}
+	// sc.Err() (e.g. ErrTooLong from a line over maxRobotsLineBytes) just
+	// stops the scan early; whatever groups and rules were already parsed
+	// are kept rather than discarded.
 	out.blocksRoot = disallowAll && !allowRoot
 	return out
 }
@@ -113,23 +148,28 @@ func (ri *robotsInfo) allowed(agent, rawURL string) bool {
 	p = percentNormalize(p)
 	agent = strings.ToLower(agent)
 	var own, star []robotsRule
+	matchedOwn := false
 	for _, g := range ri.groups {
 		for _, a := range g.agents {
 			switch a {
 			case agent:
+				matchedOwn = true
 				own = append(own, g.rules...)
 			case "*":
 				star = append(star, g.rules...)
 			}
 		}
 	}
-	rules := own
-	if rules == nil {
-		rules = star
+	// An explicit (even empty) group for our own agent replaces "*"
+	// entirely (RFC 9309 §2.2.1): it must not fall back to the wildcard
+	// group just because it happens to have no rules of its own.
+	rules := star
+	if matchedOwn {
+		rules = own
 	}
 	best, allow := -1, true
 	for _, r := range rules {
-		if !robotsMatch(r.pattern, p) {
+		if r.re == nil || !r.re.MatchString(p) {
 			continue
 		}
 		if n := len(r.pattern); n > best || (n == best && r.allow) {
@@ -177,20 +217,4 @@ func upperHexDigit(c byte) byte {
 		return c - 'a' + 'A'
 	}
 	return c
-}
-
-// robotsMatch matches a rule pattern against a path: "*" is any run of
-// characters, a trailing "$" anchors the end, everything else is a prefix.
-func robotsMatch(pattern, p string) bool {
-	anchored := strings.HasSuffix(pattern, "$")
-	parts := strings.Split(strings.TrimSuffix(pattern, "$"), "*")
-	for i := range parts {
-		parts[i] = regexp.QuoteMeta(parts[i])
-	}
-	expr := "^" + strings.Join(parts, ".*")
-	if anchored {
-		expr += "$"
-	}
-	re, err := regexp.Compile(expr)
-	return err == nil && re.MatchString(p)
 }

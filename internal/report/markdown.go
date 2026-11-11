@@ -194,9 +194,17 @@ func nextSteps(d Data) []string {
 	return out
 }
 
-// cell keeps a value on one table row.
+// cell keeps a value on one table row and neutralizes Markdown/HTML
+// metacharacters from untrusted text (GSC queries, agent-written task
+// titles and notes): "<", ">", "[", "]", "(", ")" become full-width
+// lookalikes (the same trick already used for "|"), so third-party
+// Markdown readers of the exported .md file cannot turn them into a link,
+// raw HTML or (as a side effect) an HTML comment opener ("<!--").
 func cell(s string) string {
-	return strings.NewReplacer("|", "｜", "\n", " ", "\r", " ").Replace(s)
+	return strings.NewReplacer(
+		"|", "｜", "\n", " ", "\r", " ",
+		"<", "＜", ">", "＞", "[", "［", "]", "］", "(", "（", ")", "）",
+	).Replace(s)
 }
 
 func fmtInt(v float64) string {

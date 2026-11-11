@@ -96,7 +96,7 @@ func clicksChart(days []store.DayPoint, weekFrom string) string {
 			l, w-r, y(v), y(v), l-8, y(v)+4, fmtInt(v))
 	}
 	for _, i := range uniqueInts(0, (n-1)/3, 2*(n-1)/3, n-1) {
-		fmt.Fprintf(&s, `<text x="%.1f" y="%.0f" text-anchor="middle">%s</text>`, x(i), h-8, days[i].Day[5:])
+		fmt.Fprintf(&s, `<text x="%.1f" y="%.0f" text-anchor="middle">%s</text>`, x(i), h-8, dayLabel(days[i].Day))
 	}
 	var area, line strings.Builder
 	fmt.Fprintf(&area, "M%.1f,%.1f", x(0), y(0))
@@ -118,11 +118,11 @@ func clicksChart(days []store.DayPoint, weekFrom string) string {
 	slot := (w - l - r) / float64(max(n-1, 1))
 	for i, p := range days {
 		fmt.Fprintf(&s, `<rect x="%.1f" y="%.0f" width="%.1f" height="%.0f" fill="transparent"><title>%s：%s 次点击，%s 次展示</title></rect>`,
-			x(i)-slot/2, t, slot, h-t-b, p.Day, fmtInt(p.Clicks), fmtInt(p.Impressions))
+			x(i)-slot/2, t, slot, h-t-b, html.EscapeString(p.Day), fmtInt(p.Clicks), fmtInt(p.Impressions))
 	}
 	s.WriteString(`</svg></figure><details><summary>按天的数据</summary><table><thead><tr><th>日期</th><th>点击</th><th>展示</th></tr></thead><tbody>`)
 	for _, p := range days {
-		fmt.Fprintf(&s, "<tr><td>%s</td><td>%s</td><td>%s</td></tr>", p.Day, fmtInt(p.Clicks), fmtInt(p.Impressions))
+		fmt.Fprintf(&s, "<tr><td>%s</td><td>%s</td><td>%s</td></tr>", html.EscapeString(p.Day), fmtInt(p.Clicks), fmtInt(p.Impressions))
 	}
 	s.WriteString("</tbody></table></details>")
 	return s.String()
@@ -152,6 +152,15 @@ func niceMax(hi float64) (float64, float64) {
 	return hi, hi / 4
 }
 
+// dayLabel is the axis label for a "YYYY-MM-DD" day ("MM-DD"), escaped for
+// the SVG/XML it is written into. It never panics on a shorter string.
+func dayLabel(d string) string {
+	if len(d) < 5 {
+		return html.EscapeString(d)
+	}
+	return html.EscapeString(d[5:])
+}
+
 func uniqueInts(xs ...int) []int {
 	var out []int
 	seen := map[int]bool{}
@@ -165,21 +174,23 @@ func uniqueInts(xs ...int) []int {
 }
 
 var (
-	reComment = regexp.MustCompile(`(?s)<!--.*?-->`)
-	reH       = regexp.MustCompile(`^(#{1,6})\s+(.*)$`)
-	reLI      = regexp.MustCompile(`^(\s*)[-*]\s+(.*)$`)
-	reNLI     = regexp.MustCompile(`^\s*\d+[.、]\s+(.*)$`)
-	reBold    = regexp.MustCompile(`\*\*(.+?)\*\*`)
-	reCode    = regexp.MustCompile("`([^`]+)`")
-	reSep     = regexp.MustCompile(`^\|[\s:|-]+\|$`)
+	reH    = regexp.MustCompile(`^(#{1,6})\s+(.*)$`)
+	reLI   = regexp.MustCompile(`^(\s*)[-*]\s+(.*)$`)
+	reNLI  = regexp.MustCompile(`^\s*\d+[.、]\s+(.*)$`)
+	reBold = regexp.MustCompile(`\*\*(.+?)\*\*`)
+	reCode = regexp.MustCompile("`([^`]+)`")
+	reSep  = regexp.MustCompile(`^\|[\s:|-]+\|$`)
 )
 
 // mdToHTML converts the small Markdown subset reports use (headings,
 // paragraphs, bullet and numbered lists with one nested level, tables, bold,
-// code, quotes), escaping all text. Links are not turned into anchors.
+// code, quotes), escaping all text. Links are not turned into anchors. Only
+// the literal chart marker is removed here; any other "<!-- -->" in the
+// text (e.g. from a GSC query) is just text and gets escaped like anything
+// else, not silently stripped by a generic comment-removing regex.
 // Ported from craftsail-growth internal/pkg/mdhtml.
 func mdToHTML(md string) string {
-	md = reComment.ReplaceAllString(md, "")
+	md = strings.ReplaceAll(md, chartMark, "")
 	lines := strings.Split(md, "\n")
 	var out []string
 	var open []string // list tags open, innermost last

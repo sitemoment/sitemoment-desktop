@@ -400,6 +400,27 @@ func TestCheckReportsARobotsBlock(t *testing.T) {
 	}
 }
 
+func TestUnseenOKIsOldestFirst(t *testing.T) {
+	// Deliberately the reverse of alphabetical order, so a leftover
+	// sort.Strings would make this test fail.
+	prev := map[string]store.Page{
+		"https://e.com/a": {URL: "https://e.com/a", OK: true, LastOK: 999, LastSeen: 300},
+		"https://e.com/m": {URL: "https://e.com/m", OK: true, LastOK: 10, LastSeen: 200},
+		"https://e.com/z": {URL: "https://e.com/z", OK: true, LastOK: 50, LastSeen: 100},
+	}
+	res := &rank.CrawlResult{Host: "e.com"}
+	got := unseenOK(prev, res, 10, 100000)
+	want := []string{"https://e.com/z", "https://e.com/m", "https://e.com/a"}
+	if len(got) != len(want) {
+		t.Fatalf("unseenOK = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("unseenOK = %v, want %v (oldest LastSeen first)", got, want)
+		}
+	}
+}
+
 func TestGrade(t *testing.T) {
 	p0, p1, p2, score := Grade([]store.Issue{{Severity: "p0"}, {Severity: "p1"}, {Severity: "p1"}, {Severity: "p2"}})
 	if p0 != 1 || p1 != 2 || p2 != 1 || score != 100-25-16-2 {

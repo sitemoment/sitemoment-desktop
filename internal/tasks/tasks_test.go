@@ -59,6 +59,11 @@ func TestValidate(t *testing.T) {
 	if got := Describe(Condition{Kind: KindMetric, Metric: "ctr", Scope: "page", URL: "https://example.com/a", Op: "gte", Value: 0.035, Window: 28}); got != "https://example.com/a近 28 天 GSC CTR ≥ 3.5%" {
 		t.Fatalf("Describe ctr = %q", got)
 	}
+	capped, err := Validate([]Condition{{Kind: KindMetric, Metric: "ctr", Op: "gte", Value: 5}}, site)
+	ok(t, err)
+	if capped[0].Value != 1 {
+		t.Fatalf("ctr target must be capped at 1, got %v", capped[0].Value)
+	}
 	bads := [][]Condition{
 		nil,
 		{{Kind: "rank"}},
@@ -277,6 +282,21 @@ func TestIndexedConditionIgnoredAfterDueDate(t *testing.T) {
 	ok(t, err)
 	if len(done) != 1 || done[0].Status != StatusFailed {
 		t.Fatalf("an inspection recorded after the due date (%d) must not retroactively pass the task: %+v", due, done)
+	}
+}
+
+func TestIndexedConditionToleratesTrailingSlash(t *testing.T) {
+	s, site, _ := setup(t, "127.0.0.1")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("ok")) }))
+	defer srv.Close()
+	// The inspection (from a health check) was recorded with a trailing
+	// slash; the condition's URL, as the agent wrote it, has none.
+	ok(t, s.Store.SetInspection(ctx, site.ID, srv.URL+"/new/", "PASS", "Submitted and indexed", s.now().Unix()))
+	v, err := s.Propose(ctx, Proposal{SiteID: site.ID, Title: "新页面收录", Open: true,
+		Conditions: []Condition{{Kind: KindIndexed, URL: srv.URL + "/new"}}})
+	ok(t, err)
+	if v.Outcomes[0].State != StatePass {
+		t.Fatalf("a trailing-slash mismatch must not block the match: %+v", v.Outcomes[0])
 	}
 }
 
