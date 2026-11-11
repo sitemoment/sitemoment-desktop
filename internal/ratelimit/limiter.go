@@ -2,11 +2,12 @@
 
 // Package ratelimit paces outbound API calls per key (a Google account's
 // email, or a Bing API key): at most Max calls in flight at once, and at
-// most Rate calls every Period, with one token bucket and one concurrency
-// semaphore per key. This runs in front of (not instead of) a client's own
-// 429 backoff (internal/google, internal/bing): it exists to make a 429
-// unlikely in the first place when one site, or several sites sharing the
-// same account or key, sync at once.
+// most Rate calls every Period on a sustained basis (with a small Burst
+// allowance), with one token bucket and one concurrency semaphore per key.
+// This runs in front of (not instead of) a client's own 429 backoff
+// (internal/google, internal/bing): it exists to make a 429 unlikely in the
+// first place when one site, or several sites sharing the same account or
+// key, sync at once.
 package ratelimit
 
 import (
@@ -19,8 +20,15 @@ import (
 // nil *Limiter, is a no-op (Acquire always returns immediately).
 type Limiter struct {
 	Max    int           // concurrent calls in flight per key; <=0 means unlimited
-	Rate   int           // calls per Period per key; <=0 means unlimited
+	Rate   int           // calls per Period per key, sustained; <=0 means unlimited
 	Period time.Duration // default time.Minute
+	// Burst is the token bucket's capacity (and starting size) per key:
+	// <=0 defaults to Max if Max > 0, else 1. This bounds every rolling
+	// Period-long window to roughly Rate+Burst calls, not just the first
+	// one — the bucket's capacity is Burst, not Rate, so tokens accumulated
+	// while idle cannot later combine with a full Period's refill into a
+	// much bigger spike. Keep it small (e.g. Max, the concurrency limit).
+	Burst int
 
 	// Now and Sleep are overridden in tests; nil uses real time.
 	Now   func() time.Time
@@ -60,6 +68,17 @@ func (l *Limiter) sleep(ctx context.Context, d time.Duration) error {
 	}
 }
 
+// burst is this Limiter's token-bucket capacity (see the Burst field).
+func (l *Limiter) burst() float64 {
+	if l.Burst > 0 {
+		return float64(l.Burst)
+	}
+	if l.Max > 0 {
+		return float64(l.Max)
+	}
+	return 1
+}
+
 func (l *Limiter) state(key string) *keyState {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -80,7 +99,10 @@ func (l *Limiter) state(key string) *keyState {
 // Acquire blocks until a concurrency slot and a rate-limit token are free
 // for key, or ctx ends. The caller must call the returned release func
 // (exactly once) when the call is done, freeing the concurrency slot; the
-// token itself is spent, not returned.
+// token itself is spent, not returned. Acquire wraps one HTTP request, not
+// one logical API call: a call that paginates or retries internally should
+// acquire once per page/attempt, not once for the whole thing, or its real
+// request rate goes uncounted.
 func (l *Limiter) Acquire(ctx context.Context, key string) (release func(), err error) {
 	if l == nil {
 		return func() {}, nil
@@ -106,13 +128,14 @@ func (l *Limiter) Acquire(ctx context.Context, key string) (release func(), err 
 			period = time.Minute
 		}
 		perSecond := float64(l.Rate) / period.Seconds()
+		capacity := l.burst()
 		for {
 			ks.mu.Lock()
 			now := l.now()
 			if ks.last.IsZero() {
-				ks.last, ks.tokens = now, float64(l.Rate)
+				ks.last, ks.tokens = now, capacity
 			} else if elapsed := now.Sub(ks.last).Seconds(); elapsed > 0 {
-				ks.tokens = min(float64(l.Rate), ks.tokens+elapsed*perSecond)
+				ks.tokens = min(capacity, ks.tokens+elapsed*perSecond)
 				ks.last = now
 			}
 			if ks.tokens >= 1 {
