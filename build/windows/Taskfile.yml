@@ -4,12 +4,8 @@ includes:
   common: ../Taskfile.yml
 
 vars:
-  # Signing configuration - edit these values for your project
-  # SIGN_CERTIFICATE: "path/to/certificate.pfx"
-  # SIGN_THUMBPRINT: "certificate-thumbprint"  # Alternative to SIGN_CERTIFICATE
-  # TIMESTAMP_SERVER: "http://timestamp.digicert.com"
-  #
-  # Password is stored securely in system keychain. Run: wails3 setup signing
+  # Signing: see sign:exe and build/windows/sign.ps1 (WINDOWS_CERT_PFX,
+  # WINDOWS_CERT_PASSWORD, WINDOWS_TIMESTAMP_URL in the environment).
 
   # Docker image for cross-compilation with CGO (used when CGO_ENABLED=1 on non-Windows)
   CROSS_IMAGE: wails-cross
@@ -47,17 +43,23 @@ tasks:
     preconditions:
       - sh: '{{if eq .OBFUSCATED "true"}}command -v garble >/dev/null 2>&1{{else}}true{{end}}'
         msg: "garble is required for obfuscated builds. Install it with: go install mvdan.cc/garble@v0.16.0 (requires Go 1.24+). See https://github.com/burrowers/garble/releases for version/toolchain compatibility."
+      - sh: '[ "{{.VERSION}}" = "dev" ] || go run ./cmd/stamp-version -check "{{.VERSION}}" >/dev/null'
+        msg: 'VERSION "{{.VERSION}}" is not a valid release version (see go run ./cmd/stamp-version -check); a production build sets VERSION from the release tag with its leading "v" stripped'
     cmds:
       - task: generate:syso
         vars:
           ARCH: '{{.ARCH}}'
-      - '{{if eq .OBFUSCATED "true"}}garble {{.GARBLE_ARGS}} build{{else}}go build{{end}} {{.BUILD_FLAGS}} -o "{{.BIN_DIR}}/{{.APP_NAME}}.exe"'
+      # silent: a release build's BUILD_FLAGS embeds RELEASE_LDFLAGS, which can
+      # carry GOOGLE_CLIENT_SECRET and UPDATE_PUBLIC_KEY; don't echo the
+      # command line that contains them into (CI) logs.
+      - cmd: '{{if eq .OBFUSCATED "true"}}garble {{.GARBLE_ARGS}} build{{else}}go build{{end}} {{.BUILD_FLAGS}} -o "{{.BIN_DIR}}/{{.APP_NAME}}.exe"'
+        silent: true
       - cmd: powershell Remove-item *.syso
         platforms: [windows]
       - cmd: rm -f *.syso
         platforms: [linux, darwin]
     vars:
-      BUILD_FLAGS: '{{if eq .DEV "true"}}{{if or .EXTRA_TAGS (eq .OBFUSCATED "true")}}-tags {{if eq .OBFUSCATED "true"}}wails_obfuscated{{if .EXTRA_TAGS}},{{end}}{{end}}{{.EXTRA_TAGS}} {{end}}-buildvcs=false -gcflags=all="-l"{{else}}-tags production{{if eq .OBFUSCATED "true"}},wails_obfuscated{{end}}{{if .EXTRA_TAGS}},{{.EXTRA_TAGS}}{{end}} -trimpath -buildvcs=false -ldflags="-w -s -H windowsgui"{{end}}'
+      BUILD_FLAGS: '{{if eq .DEV "true"}}{{if or .EXTRA_TAGS (eq .OBFUSCATED "true")}}-tags {{if eq .OBFUSCATED "true"}}wails_obfuscated{{if .EXTRA_TAGS}},{{end}}{{end}}{{.EXTRA_TAGS}} {{end}}-buildvcs=false -gcflags=all="-l"{{else}}-tags production{{if eq .OBFUSCATED "true"}},wails_obfuscated{{end}}{{if .EXTRA_TAGS}},{{.EXTRA_TAGS}}{{end}} -trimpath -buildvcs=false -ldflags="-w -s -H windowsgui {{.RELEASE_LDFLAGS}}"{{end}}'
     env:
       GOOS: windows
       CGO_ENABLED: '{{.CGO_ENABLED | default "0"}}'
@@ -99,10 +101,10 @@ tasks:
     cmds:
       - task: '{{if eq (.FORMAT | default "nsis") "msix"}}create:msix:package{{else}}create:nsis:installer{{end}}'
         vars:
-          INSTALL_SCOPE: '{{.INSTALL_SCOPE | default "machine"}}'
+          INSTALL_SCOPE: '{{.INSTALL_SCOPE | default "user"}}'
     vars:
       FORMAT: '{{.FORMAT | default "nsis"}}'
-      INSTALL_SCOPE: '{{.INSTALL_SCOPE | default "machine"}}'
+      INSTALL_SCOPE: '{{.INSTALL_SCOPE | default "user"}}'
 
   generate:syso:
     summary: Generates Windows `.syso` file
@@ -113,10 +115,26 @@ tasks:
       ARCH: '{{.ARCH | default ARCH}}'
 
   create:nsis:installer:
-    summary: Creates an NSIS installer
-    dir: build/windows/nsis
+    summary: Builds the app, signs the exe (sign.ps1; no-op without WINDOWS_CERT_PFX) and builds the NSIS installer around it
     deps:
       - task: build
+    cmds:
+      - task: sign:exe
+      - task: nsis
+        vars:
+          ARCH: '{{.ARCH}}'
+          INSTALL_SCOPE: '{{.INSTALL_SCOPE}}'
+    vars:
+      ARCH: '{{.ARCH | default ARCH}}'
+      INSTALL_SCOPE: '{{.INSTALL_SCOPE | default "user"}}'
+
+  nsis:
+    summary: |
+      Builds the NSIS installer around the existing bin/<app>.exe without rebuilding it, so a signed
+      exe stays signed. The default scope is "user" ($LOCALAPPDATA\Programs\SiteMoment, no UAC): the
+      app replaces its own exe when it updates, which a per-machine install under Program Files would
+      not allow.
+    dir: build/windows/nsis
     preconditions:
       - sh: '[ "{{.INSTALL_SCOPE}}" = "user" ] || [ "{{.INSTALL_SCOPE}}" = "machine" ]'
         msg: "INSTALL_SCOPE must be 'user' or 'machine', got '{{.INSTALL_SCOPE}}'"
@@ -132,7 +150,7 @@ tasks:
     vars:
       ARCH: '{{.ARCH | default ARCH}}'
       ARG_FLAG: '{{if eq .ARCH "amd64"}}AMD64{{else}}ARM64{{end}}'
-      INSTALL_SCOPE: '{{.INSTALL_SCOPE | default "machine"}}'
+      INSTALL_SCOPE: '{{.INSTALL_SCOPE | default "user"}}'
 
   create:msix:package:
     summary: Creates an MSIX package
@@ -164,32 +182,7 @@ tasks:
     cmds:
       - '{{.BIN_DIR}}/{{.APP_NAME}}.exe'
 
-  sign:
-    summary: Signs the Windows executable
-    desc: |
-      Signs the .exe with an Authenticode certificate.
-      Set SIGN_CERTIFICATE or SIGN_THUMBPRINT to override the certificate
-      configured globally via `wails3 setup` (~/.config/wails/defaults.yaml).
-      Password is retrieved from system keychain (run: wails3 setup signing)
-    deps:
-      - task: build
+  sign:exe:
+    summary: Signs bin/sitemoment-desktop.exe with Authenticode (build/windows/sign.ps1; no-op without WINDOWS_CERT_PFX)
     cmds:
-      # Certificate vars are optional: if unset, `wails3 tool sign` falls back to
-      # the certificate configured globally via `wails3 setup`.
-      - wails3 tool sign --input "{{.BIN_DIR}}/{{.APP_NAME}}.exe" {{if .SIGN_CERTIFICATE}}--certificate "{{.SIGN_CERTIFICATE}}"{{end}} {{if .SIGN_THUMBPRINT}}--thumbprint "{{.SIGN_THUMBPRINT}}"{{end}} {{if .TIMESTAMP_SERVER}}--timestamp "{{.TIMESTAMP_SERVER}}"{{end}}
-
-  sign:installer:
-    summary: Signs the NSIS installer
-    desc: |
-      Creates and signs the NSIS installer.
-      Set SIGN_CERTIFICATE or SIGN_THUMBPRINT to override the certificate
-      configured globally via `wails3 setup` (~/.config/wails/defaults.yaml).
-      Password is retrieved from system keychain (run: wails3 setup signing)
-    deps:
-      - task: create:nsis:installer
-        vars:
-          INSTALL_SCOPE: '{{.INSTALL_SCOPE | default "machine"}}'
-    vars:
-      INSTALL_SCOPE: '{{.INSTALL_SCOPE | default "machine"}}'
-    cmds:
-      - wails3 tool sign --input "build/windows/nsis/{{.APP_NAME}}-installer.exe" {{if .SIGN_CERTIFICATE}}--certificate "{{.SIGN_CERTIFICATE}}"{{end}} {{if .SIGN_THUMBPRINT}}--thumbprint "{{.SIGN_THUMBPRINT}}"{{end}} {{if .TIMESTAMP_SERVER}}--timestamp "{{.TIMESTAMP_SERVER}}"{{end}}
+      - pwsh -NoProfile -ExecutionPolicy Bypass -File build/windows/sign.ps1 "{{.BIN_DIR}}/{{.APP_NAME}}.exe"

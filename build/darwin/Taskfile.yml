@@ -6,6 +6,10 @@ includes:
 vars:
   # Docker image for cross-compilation (used when building on non-macOS)
   CROSS_IMAGE: wails-cross
+  # The bundle is SiteMoment.app (and SiteMoment.dmg); the executable inside
+  # stays sitemoment-desktop (APP_NAME, CFBundleExecutable).
+  BUNDLE: SiteMoment
+  RELEASE_DIR: '{{.BIN_DIR}}/release'
 
 tasks:
   build:
@@ -43,11 +47,17 @@ tasks:
     preconditions:
       - sh: '{{if eq .OBFUSCATED "true"}}command -v garble >/dev/null 2>&1{{else}}true{{end}}'
         msg: "garble is required for obfuscated builds. Install it with: go install mvdan.cc/garble@v0.16.0 (requires Go 1.24+). See https://github.com/burrowers/garble/releases for version/toolchain compatibility."
+      - sh: '[ "{{.VERSION}}" = "dev" ] || go run ./cmd/stamp-version -check "{{.VERSION}}" >/dev/null'
+        msg: 'VERSION "{{.VERSION}}" is not a valid release version (see go run ./cmd/stamp-version -check); a production build sets VERSION from the release tag with its leading "v" stripped'
     cmds:
       - wails3 tool prepare-macos-output --dir "{{.BIN_DIR}}"
-      - '{{if eq .OBFUSCATED "true"}}garble {{.GARBLE_ARGS}} build{{else}}go build{{end}} {{.BUILD_FLAGS}} -o "{{.OUTPUT}}"'
+      # silent: a release build's BUILD_FLAGS embeds RELEASE_LDFLAGS, which can
+      # carry GOOGLE_CLIENT_SECRET and UPDATE_PUBLIC_KEY; don't echo the
+      # command line that contains them into (CI) logs.
+      - cmd: '{{if eq .OBFUSCATED "true"}}garble {{.GARBLE_ARGS}} build{{else}}go build{{end}} {{.BUILD_FLAGS}} -o "{{.OUTPUT}}"'
+        silent: true
     vars:
-      BUILD_FLAGS: '{{if eq .DEV "true"}}{{if or .EXTRA_TAGS (eq .OBFUSCATED "true")}}-tags {{if eq .OBFUSCATED "true"}}wails_obfuscated{{if .EXTRA_TAGS}},{{end}}{{end}}{{.EXTRA_TAGS}} {{end}}-buildvcs=false -gcflags=all="-l"{{else}}-tags production{{if eq .OBFUSCATED "true"}},wails_obfuscated{{end}}{{if .EXTRA_TAGS}},{{.EXTRA_TAGS}}{{end}} -trimpath -buildvcs=false -ldflags="-w -s"{{end}}'
+      BUILD_FLAGS: '{{if eq .DEV "true"}}{{if or .EXTRA_TAGS (eq .OBFUSCATED "true")}}-tags {{if eq .OBFUSCATED "true"}}wails_obfuscated{{if .EXTRA_TAGS}},{{end}}{{end}}{{.EXTRA_TAGS}} {{end}}-buildvcs=false -gcflags=all="-l"{{else}}-tags production{{if eq .OBFUSCATED "true"}},wails_obfuscated{{end}}{{if .EXTRA_TAGS}},{{.EXTRA_TAGS}}{{end}} -trimpath -buildvcs=false -ldflags="-w -s {{.RELEASE_LDFLAGS}}"{{end}}'
       DEFAULT_OUTPUT: '{{.BIN_DIR}}/{{.APP_NAME}}'
       OUTPUT: '{{ .OUTPUT | default .DEFAULT_OUTPUT }}'
     env:
@@ -143,7 +153,7 @@ tasks:
     platforms: [darwin]
     cmds:
       - >-
-        wails3 tool package --format dmg --name "{{.APP_NAME}}" --out "{{.BIN_DIR}}"
+        wails3 tool package --format dmg --name "{{.BUNDLE}}" --out "{{.BIN_DIR}}"
         --background "{{.DMG_BACKGROUND}}"
         --volume-icon "{{.DMG_VOLUME_ICON}}"
         --file-icon "{{.DMG_FILE_ICON}}"
@@ -153,7 +163,7 @@ tasks:
     vars:
       DMG_BACKGROUND: '{{.DMG_BACKGROUND | default "build/darwin/dmg-background.png"}}'
       DMG_VOLUME_ICON: '{{.DMG_VOLUME_ICON | default "build/darwin/icons.icns"}}'
-      DMG_FILE_ICON: '{{.DMG_FILE_ICON | default "build/darwin/dmg-file-icon.icns"}}'
+      DMG_FILE_ICON: '{{.DMG_FILE_ICON | default "build/darwin/icons.icns"}}'
       DMG_WINDOW_WIDTH: '{{.DMG_WINDOW_WIDTH | default "540"}}'
       DMG_WINDOW_HEIGHT: '{{.DMG_WINDOW_HEIGHT | default "380"}}'
       DMG_FILES: '{{.DMG_FILES | default ""}}'
@@ -164,25 +174,21 @@ tasks:
     cmds:
       # A reused bundle can acquire Finder metadata in synced folders. Build a
       # fresh bundle so codesign never has to replace a contaminated signature.
-      - test -n "{{.BIN_DIR}}" && test -n "{{.APP_NAME}}" && rm -rf -- "{{.BIN_DIR}}/{{.APP_NAME}}.app"
-      - mkdir -p "{{.BIN_DIR}}/{{.APP_NAME}}.app/Contents/MacOS"
-      - mkdir -p "{{.BIN_DIR}}/{{.APP_NAME}}.app/Contents/Resources"
-      - cp build/darwin/icons.icns "{{.BIN_DIR}}/{{.APP_NAME}}.app/Contents/Resources"
-      - |
-        if [ -f build/darwin/Assets.car ]; then
-          cp build/darwin/Assets.car "{{.BIN_DIR}}/{{.APP_NAME}}.app/Contents/Resources"
-        fi
-      - cp "{{.BIN_DIR}}/{{.APP_NAME}}" "{{.BIN_DIR}}/{{.APP_NAME}}.app/Contents/MacOS"
-      - cp build/darwin/Info.plist "{{.BIN_DIR}}/{{.APP_NAME}}.app/Contents"
+      - test -n "{{.BIN_DIR}}" && test -n "{{.BUNDLE}}" && rm -rf -- "{{.BIN_DIR}}/{{.BUNDLE}}.app"
+      - mkdir -p "{{.BIN_DIR}}/{{.BUNDLE}}.app/Contents/MacOS"
+      - mkdir -p "{{.BIN_DIR}}/{{.BUNDLE}}.app/Contents/Resources"
+      - cp build/darwin/icons.icns "{{.BIN_DIR}}/{{.BUNDLE}}.app/Contents/Resources"
+      - cp "{{.BIN_DIR}}/{{.APP_NAME}}" "{{.BIN_DIR}}/{{.BUNDLE}}.app/Contents/MacOS"
+      - cp build/darwin/Info.plist "{{.BIN_DIR}}/{{.BUNDLE}}.app/Contents"
       - task: '{{if eq OS "darwin"}}codesign:adhoc{{else}}codesign:skip{{end}}'
 
   codesign:adhoc:
     summary: Ad-hoc signs the app bundle (macOS only)
     internal: true
     cmds:
-      - xattr -cr "{{.BIN_DIR}}/{{.APP_NAME}}.app"
-      - codesign --force --deep --sign - "{{.BIN_DIR}}/{{.APP_NAME}}.app"
-      - codesign --verify --deep --strict "{{.BIN_DIR}}/{{.APP_NAME}}.app"
+      - xattr -cr "{{.BIN_DIR}}/{{.BUNDLE}}.app"
+      - codesign --force --sign - "{{.BIN_DIR}}/{{.BUNDLE}}.app"
+      - codesign --verify --strict "{{.BIN_DIR}}/{{.BUNDLE}}.app"
 
   codesign:skip:
     summary: Skips codesigning when cross-compiling
@@ -208,26 +214,25 @@ tasks:
       - codesign --verify --deep --strict "{{.BIN_DIR}}/{{.APP_NAME}}.dev.app"
       - '"{{.BIN_DIR}}/{{.APP_NAME}}.dev.app/Contents/MacOS/{{.APP_NAME}}"'
 
-  sign:
-    summary: Signs the application bundle with Developer ID
-    desc: |
-      Signs the .app bundle for distribution.
-      Uses signing identity from `wails3 setup` (stored in ~/.config/wails/defaults.yaml).
-      Override with: task darwin:sign -- --identity "Developer ID Application: ..."
-    deps:
-      - task: package
+  sign:app:
+    summary: Signs bin/SiteMoment.app with Developer ID and notarizes it (build/darwin/sign.sh; no-op without MAC_SIGN_IDENTITY)
     cmds:
-      - wails3 tool sign --input "{{.BIN_DIR}}/{{.APP_NAME}}.app" {{.CLI_ARGS}}
+      - build/darwin/sign.sh app "{{.BIN_DIR}}/{{.BUNDLE}}.app"
 
-  sign:notarize:
-    summary: Signs and notarizes the application bundle
-    desc: |
-      Signs the .app bundle and submits it for notarization.
-      Uses signing identity and keychain profile from `wails3 setup`.
-
-      First-time setup:
-        wails3 setup
-    deps:
-      - task: package
+  sign:dmg:
+    summary: Signs and notarizes bin/SiteMoment.dmg (build/darwin/sign.sh; no-op without MAC_SIGN_IDENTITY)
     cmds:
-      - wails3 tool sign --input "{{.BIN_DIR}}/{{.APP_NAME}}.app" --notarize {{.CLI_ARGS}}
+      - build/darwin/sign.sh dmg "{{.BIN_DIR}}/{{.BUNDLE}}.dmg"
+
+  release:
+    summary: Release files in bin/release - SiteMoment-macos-universal.dmg (install) and .zip (self-update, SiteMoment.app as its only entry) - Developer ID signed and notarized when the MAC_* variables are set, ad-hoc signed otherwise
+    deps:
+      - task: package:universal
+    cmds:
+      - task: sign:app
+      - rm -f "{{.BIN_DIR}}/{{.BUNDLE}}.dmg"
+      - task: create:dmg
+      - task: sign:dmg
+      - test -n "{{.RELEASE_DIR}}" && rm -rf -- "{{.RELEASE_DIR}}" && mkdir -p "{{.RELEASE_DIR}}"
+      - ditto -c -k --norsrc --noextattr --keepParent "{{.BIN_DIR}}/{{.BUNDLE}}.app" "{{.RELEASE_DIR}}/SiteMoment-macos-universal.zip"
+      - cp "{{.BIN_DIR}}/{{.BUNDLE}}.dmg" "{{.RELEASE_DIR}}/SiteMoment-macos-universal.dmg"

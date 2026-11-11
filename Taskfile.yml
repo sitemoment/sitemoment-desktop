@@ -9,6 +9,13 @@ vars:
   # by `wails3 build GOOS=...` (or the GOOS env var) for cross-compilation. The
   # tasks below dispatch to the matching platform Taskfile via this variable.
   GOOS: '{{.GOOS | default OS}}'
+  # Release builds: the release workflow sets VERSION (the tag without "v"),
+  # GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET (the "desktop app" OAuth client)
+  # and UPDATE_PUBLIC_KEY in the environment; a local build is "dev", without
+  # a built-in Google client, and does not self-update. Only production
+  # (non-DEV) builds use these flags.
+  VERSION: '{{.VERSION | default "dev"}}'
+  RELEASE_LDFLAGS: '-X main.version={{.VERSION}}{{if .GOOGLE_CLIENT_ID}} -X main.googleClientID={{.GOOGLE_CLIENT_ID}}{{end}}{{if .GOOGLE_CLIENT_SECRET}} -X main.googleClientSecret={{.GOOGLE_CLIENT_SECRET}}{{end}}{{if .UPDATE_PUBLIC_KEY}} -X main.updatePublicKey={{.UPDATE_PUBLIC_KEY}}{{end}}'
 
 includes:
   common: ./build/Taskfile.yml

@@ -6,11 +6,13 @@ require (
 	github.com/anthropics/anthropic-sdk-go v1.84.0
 	github.com/wailsapp/wails/v3 v3.1.0
 	github.com/zalando/go-keyring v0.2.8
+	golang.org/x/mod v0.42.0
 	golang.org/x/net v0.62.0
 	modernc.org/sqlite v1.62.0
 )
 
 require (
+	git.sr.ht/~jackmordaunt/go-toast/v2 v2.0.3 // indirect
 	github.com/bahlo/generic-list-go v0.2.0 // indirect
 	github.com/buger/jsonparser v1.1.2 // indirect
 	github.com/coder/websocket v1.8.14 // indirect

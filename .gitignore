@@ -12,3 +12,6 @@ frontend/node_modules
 *.db
 *.db-wal
 *.db-shm
+
+# Windows installer build input (wails3 generate webview2bootstrapper)
+/build/windows/nsis/MicrosoftEdgeWebview2Setup.exe

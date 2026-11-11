@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Entitlements for the Developer ID build (hardened runtime, no App Sandbox).
+     The app needs no hardened-runtime exceptions: Go does not JIT, and WKWebView
+     runs JavaScript in Apple's own WebContent process. The two network keys only
+     take effect inside the App Sandbox; they are listed so a sandboxed build
+     later keeps outgoing requests and the 127.0.0.1 OAuth callback. -->
+<plist version="1.0">
+<dict>
+    <key>com.apple.security.network.client</key>
+    <true/>
+    <key>com.apple.security.network.server</key>
+    <true/>
+</dict>
+</plist>

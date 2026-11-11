@@ -68,6 +68,23 @@
 - Windows 上的传输机制、以及连续触发验证码的流程，都还没有测试环境可以验证。
 - Google OAuth 应用的审核（面向更多用户发布前，Google 可能要求验证）还没做。
 
+**M5 已完成的功能**（分支 `m5`，后端改动在仓库 `sitemoment` 的分支 `desktop-m5`）：
+- 打包：macOS 通用版（arm64 + amd64）`SiteMoment.app` + `.dmg`（`wails3 task darwin:release`），Windows 当前用户安装的 NSIS 安装包（带 WebView2 引导安装）；SiteMoment 图标；版本号来自 git tag（`cmd/stamp-version` + `-ldflags`）。
+- 签名和公证已接好、按需打开：有 Apple 证书和 App Store Connect API 密钥时 `build/darwin/sign.sh` 用 hardened runtime 签名、公证、staple；有 Windows 证书时 `build/windows/sign.ps1` 用 signtool 签名。现在没有证书，发布的是不签名的版本。
+- 自动更新：Wails 的 updater + GitHub Releases，更新包必须在 `SHA256SUMS` 里；更新签名（Ed25519，`cmd/updsign`）配好密钥对后强制要求——公钥编进客户端后，没有对上 `.sig` 的发布会被拒绝（fail closed），私钥只作为 GitHub Actions `release` 环境（要求审核者）的 secret，不会出现在别处。启动 30 秒后和之后每天检查，设置 → 软件更新可以手动检查、关掉自动检查；右上角的更新条下载、校验、重启。开发版（`dev`）不检查。
+- 通知：新版本提示在应用里；窗口在后台时，采集需要人工验证、体检发现新的 P0 或失败、任务通过或到期未通过会发系统通知（设置 → 通知，可以关、可以发测试通知）。
+- 隐私说明（设置 → 隐私说明），网页版隐私政策 `https://sitemoment.com/seo/privacy`（Google OAuth 审核要用）。
+- GitHub Actions：`ci.yml`（推送和 PR：macOS 上 gofmt、vet、`go test -race`、`GOOS=windows` 交叉 vet、前端测试和构建；Windows 上编译和测试），`release.yml`（`v*` tag：测试 → 两个平台构建、按需签名 → 必须签名更新包 → `SHA256SUMS`、发布说明 → GitHub Release；不带 tag 手动运行只试构建两个平台、不发布、不要求更新签名密钥）。第三方 Action 按完整 commit SHA 锁定；工作流用 actionlint 检查过。
+- 后端：`[seo] retired` 开关（默认关）：打开后 `/seo/` 变成下载和账户页、网页版 Agent 的对话接口返回 410、`/admx` 的 SEO Agent 标签页隐藏、「我的站」只给站长、巡检定时任务停止；`/seo/download`、`/seo/privacy`、`/v1/desktop/account` 一直可用。
+
+**M5 已知问题 / 待办**：
+- 没有签名：macOS 第一次打开要在「隐私与安全性」里放行，Windows SmartScreen 会提示；买了证书后按 RELEASING.md 加 secret 即可。
+- macOS 没签名（ad-hoc）的 app 包里，系统通知服务能启动，但是否能拿到通知授权、通知能否显示没有实测（要人点授权），见端到端清单第 6 条；不行时只有应用内提示。
+- Windows 上没有实测：安装包、WebView2 引导安装、系统通知、自动更新替换 exe，都只在 CI 里构建过。更新后「应用和功能」里显示的版本号还是安装时的（安装包写的注册表），卸载程序不签名。
+- 自动更新要求应用所在的文件夹可写：macOS 装在「应用程序」里（管理员账户），Windows 用当前用户安装（安装包默认如此）。
+- 更新签名密钥（`UPDATE_PUBLIC_KEY` / `UPDATE_SIGNING_KEY`）和 `release` GitHub Environment 还没有在仓库里设置（Task 18 由负责人决定时设置）；设置好之前，`release.yml` 的发布会在 `version` 任务就失败（缺 `UPDATE_PUBLIC_KEY`）。
+- Google OAuth 应用审核还没提交（材料见 RELEASING.md）。
+
 **如何运行**：
 
 ```bash
@@ -91,6 +108,17 @@ wails3 dev
 
     SITEMOMENT_DATA_DIR=/tmp/smd-m4 go run .
     # 添加站点 example.com → 几秒后站点列表出现健康分 92；报告页有第一份周报；状态栏「通知 1」
+
+## 下载和安装
+
+- 下载页：<https://sitemoment.com/seo/download>，或 [GitHub Releases](https://github.com/sitemoment/sitemoment-desktop/releases)。
+- **macOS**（12 以上，Apple 芯片和 Intel 通用）：打开 `SiteMoment-macos-universal.dmg`，把 SiteMoment 拖进「应用程序」，从「应用程序」打开。直接在 .dmg 里打开的不能自动更新。还没有 Apple 签名的版本第一次打开会被拦：到「系统设置 → 隐私与安全性」点「仍要打开」（或者 `xattr -dr com.apple.quarantine /Applications/SiteMoment.app`）。
+- **Windows**（10/11，64 位）：运行 `SiteMoment-windows-amd64-setup.exe`，装到当前用户（`%LOCALAPPDATA%\Programs\SiteMoment`，不需要管理员权限），没有 WebView2 的电脑会自动安装。还没有代码签名的版本 SmartScreen 会提示，点「更多信息 → 仍要运行」。
+- **更新**：应用打开后和之后每天检查一次 GitHub Releases（设置 → 软件更新可以关掉或手动检查）。有新版本时右上角提示，「下载并安装」后核对 SHA-256（配了更新签名时还核对 Ed25519 签名），「重启并更新」替换应用本身，本机数据不动。
+- **卸载**：macOS 删掉 `/Applications/SiteMoment.app`；Windows 在「应用」里卸载。数据目录（macOS `~/Library/Application Support/SiteMoment/`，Windows `%APPDATA%\SiteMoment\`）和钥匙串里的 `SiteMoment` 条目不会自动删除，需要的话手动删。
+- **隐私**：设置 → 隐私说明；完整版 <https://sitemoment.com/seo/privacy>。
+
+发布流程（打 tag、签名和公证的密钥、本机打包）见 [RELEASING.md](RELEASING.md)；负责人的端到端验收清单见 [docs/e2e-checklist.md](docs/e2e-checklist.md)。
 
 ## 开发
 

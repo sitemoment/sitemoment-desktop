@@ -124,3 +124,19 @@ export interface TaskView {
 export interface Report { id: number; siteId: number; origin: "weekly" | "manual"; from: string; to: string; title: string; markdown: string; html: string; createdAt: number }
 export interface Notice { id: number; siteId: number; kind: string; title: string; body: string; ref: string; read: boolean; createdAt: number }
 export interface NoticeList { items: Notice[]; unread: number }
+
+// Software updates (internal/updates.Status).
+export type UpdateState = "off" | "idle" | "checking" | "uptodate" | "available" | "downloading" | "verifying" | "installing" | "ready" | "error";
+export interface UpdateVersion { version: string; notes: string; url: string; publishedAt: number; size: number }
+export interface UpdateStatus {
+  current: string; state: UpdateState; reason?: string; latest?: UpdateVersion | null;
+  written: number; total: number; stage?: string; error?: string; checkedAt: number; auto: boolean;
+}
+
+// Notifications (internal/app.Note, NotifySettings). The Go type's Kind also
+// covers "human" and "notice" (a collector needing a CAPTCHA, an M4 notice),
+// but those only ever go through Notifier.OS (the OS notification, not the
+// "notify" event): the frontend only ever receives "update" and "info" notes
+// here, so Toasts' kind union is the narrower one actually seen.
+export interface Note { title: string; body: string; kind: "update" | "info" }
+export interface NotifySettings { native: boolean; available: boolean; reason?: string }
