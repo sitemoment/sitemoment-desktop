@@ -181,6 +181,9 @@ func (s *ReportService) Delete(ctx context.Context, id int64) error {
 // Export saves a report as "html" or "md" where the user picks; it returns
 // the path ("" when the user cancelled).
 func (s *ReportService) Export(ctx context.Context, id int64, format string) (string, error) {
+	if format != "html" && format != "md" {
+		return "", fmt.Errorf("report: unknown export format %q", format)
+	}
 	r, err := s.Ops.Store.Report(ctx, id)
 	if err != nil {
 		return "", err
@@ -188,8 +191,6 @@ func (s *ReportService) Export(ctx context.Context, id int64, format string) (st
 	data := r.HTML
 	if format == "md" {
 		data = r.Markdown
-	} else {
-		format = "html"
 	}
 	if s.Save == nil {
 		return "", errors.New("这个环境不能导出文件")

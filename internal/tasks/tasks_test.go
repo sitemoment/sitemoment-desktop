@@ -4,6 +4,7 @@ package tasks
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -313,5 +314,18 @@ func TestDismiss(t *testing.T) {
 	}
 	if _, err := s.Propose(ctx, Proposal{SiteID: site.ID, Title: " ", Conditions: []Condition{{Kind: KindIndexed, URL: "https://example.com/"}}}); !errors.Is(err, ErrCondition) {
 		t.Fatalf("empty title: %v", err)
+	}
+}
+
+func TestProposeCapsOpenTasksPerSite(t *testing.T) {
+	s, site, _ := setup(t, "example.com")
+	for i := 0; i < maxOpenTasks; i++ {
+		_, err := s.Propose(ctx, Proposal{SiteID: site.ID, Title: fmt.Sprintf("task %d", i),
+			Conditions: []Condition{{Kind: KindIndexed, URL: "https://example.com/"}}})
+		ok(t, err)
+	}
+	if _, err := s.Propose(ctx, Proposal{SiteID: site.ID, Title: "one too many",
+		Conditions: []Condition{{Kind: KindIndexed, URL: "https://example.com/"}}}); !errors.Is(err, ErrCondition) {
+		t.Fatalf("expected a cap error past %d open/proposed tasks: %v", maxOpenTasks, err)
 	}
 }

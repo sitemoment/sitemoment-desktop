@@ -27,6 +27,8 @@ const (
 	maxDays     = 180
 	maxTitle    = 120
 	maxDetail   = 2000
+	// maxOpenTasks caps how many proposed/open tasks a site can have at once.
+	maxOpenTasks = 30
 )
 
 // Service creates and checks tasks.
@@ -82,6 +84,11 @@ func (s *Service) Propose(ctx context.Context, p Proposal) (View, error) {
 	site, err := s.Store.Site(ctx, p.SiteID)
 	if err != nil {
 		return View{}, err
+	}
+	if open, err := s.Store.Tasks(ctx, site.ID, StatusProposed, StatusOpen); err != nil {
+		return View{}, err
+	} else if len(open) >= maxOpenTasks {
+		return View{}, fmt.Errorf("%w: 这个站点的进行中任务已经有 %d 个，请先完成或删除一些", ErrCondition, maxOpenTasks)
 	}
 	p.Title = strings.TrimSpace(p.Title)
 	if p.Title == "" || len([]rune(p.Title)) > maxTitle {

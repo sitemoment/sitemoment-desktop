@@ -220,6 +220,10 @@ func TestReportExport(t *testing.T) {
 	if path, err := rs.Export(ctx, r.ID, "md"); path != "" || err != nil {
 		t.Fatalf("cancelled export = %q, %v", path, err)
 	}
+	asked = ""
+	if path, err := rs.Export(ctx, r.ID, "pdf"); err == nil || path != "" || asked != "" {
+		t.Fatalf("an unknown format must be rejected, not silently exported as html: path %q, err %v", path, err)
+	}
 	if list, _ := rs.List(ctx, site.ID); len(list) != 1 || list[0].Origin != "manual" {
 		t.Fatalf("List = %+v", list)
 	}
