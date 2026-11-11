@@ -18,6 +18,12 @@ import (
 	"github.com/sitemoment/sitemoment-desktop/internal/store"
 )
 
+// Limiter additionally paces requests per key (a Bing API key); nil means
+// no extra pacing. *ratelimit.Limiter satisfies this.
+type Limiter interface {
+	Acquire(ctx context.Context, key string) (release func(), err error)
+}
+
 // Keys looks up a Bing API key by its name.
 type Keys interface {
 	BingKey(account string) (string, error)
@@ -40,6 +46,26 @@ type Syncer struct {
 	Bing         Source
 	Now          func() time.Time // default time.Now
 	RefreshAfter time.Duration    // default 12h
+	// Limiter paces requests per Bing API key, across every site sharing
+	// it; nil means no extra pacing.
+	Limiter Limiter
+}
+
+// call runs fetch under Limiter's pacing for key (a no-op when Limiter is nil).
+func (s *Syncer) call(ctx context.Context, key string, fetch func() error) error {
+	var release func()
+	if s.Limiter != nil {
+		r, err := s.Limiter.Acquire(ctx, key)
+		if err != nil {
+			return err
+		}
+		release = r
+	}
+	err := fetch()
+	if release != nil {
+		release()
+	}
+	return err
 }
 
 // SyncSite refreshes the site's Bing data unless it was fetched recently.
@@ -72,7 +98,12 @@ func (s *Syncer) SyncSite(ctx context.Context, site store.Site) (gscsync.Result,
 		if kind == "page" {
 			fetch = s.Bing.Pages
 		}
-		rows, err := fetch(ctx, key, site.BingSite)
+		var rows []bing.Stat
+		err := s.call(ctx, key, func() error {
+			r, err := fetch(ctx, key, site.BingSite)
+			rows = r
+			return err
+		})
 		res.Requests++
 		if err != nil {
 			return res, fmt.Errorf("Bing %s stats: %w", kind, err)
@@ -85,7 +116,12 @@ func (s *Syncer) SyncSite(ctx context.Context, site store.Site) (gscsync.Result,
 			return res, err
 		}
 	}
-	traffic, err := s.Bing.Traffic(ctx, key, site.BingSite)
+	var traffic []bing.Traffic
+	err = s.call(ctx, key, func() error {
+		t, err := s.Bing.Traffic(ctx, key, site.BingSite)
+		traffic = t
+		return err
+	})
 	res.Requests++
 	if err != nil {
 		return res, fmt.Errorf("Bing traffic: %w", err)

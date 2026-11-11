@@ -19,8 +19,21 @@ export interface Overview {
   site: Site; synced: boolean; days: number; from: string; to: string; prevFrom: string; prevTo: string;
   current: Totals; previous: Totals; daily: DayPoint[]; prevDaily: DayPoint[]; queries: QueryStat[]; tiles: Tile[];
 }
-export interface SyncStatus { siteId: number; state: "running" | "done" | "failed"; error?: string; requests: number; at: number }
+export interface SyncStatus { siteId: number; state: "running" | "done" | "failed" | "stopped"; error?: string; requests: number; at: number }
 export interface SyncProgress { siteId: number; slice: string; day: string; done: number; total: number }
+
+/** One source's (gsc/ga/bing) one locally kept slice's coverage, from SyncService.Progress. */
+export interface SliceProgress {
+  slice: string; label: string; daysCovered: number; daysInRange: number; newestDay?: string; lastFetched?: number;
+  state: "同步中" | "回填中" | "已完成" | "已暂停" | "失败";
+}
+/** One site's one data source's progress, from SyncService.Progress. */
+export interface SourceProgress {
+  source: "gsc" | "ga" | "bing"; label: string; state: SliceProgress["state"]; error?: string; nextBackfillAt?: number;
+  slices?: SliceProgress[] | null;
+}
+/** One site's whole sync progress table row, from SyncService.Progress. */
+export interface SiteProgress { siteId: number; host: string; sources: SourceProgress[] | null }
 export interface Info { version: string; dataDir: string; dbBytes: number }
 export type KeywordKind = "target" | "found" | "scene";
 export interface Metric { value: number | null; source: "" | "bing" | "sitemoment"; at: number }

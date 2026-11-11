@@ -30,6 +30,7 @@ export default function App() {
   const [page, setPage] = useState<Page>("overview");
   const [statuses, setStatuses] = useState<Record<number, SyncStatus>>({});
   const [progress, setProgress] = useState<Record<number, SyncProgress>>({});
+  const [syncPaused, setSyncPaused] = useState(false);
   const [info, setInfo] = useState<Info | null>(null);
   const [collect, setCollect] = useState<CollectorStats | null>(null);
   const [human, setHuman] = useState<RunView | null>(null);
@@ -62,6 +63,8 @@ export default function App() {
     reloadSites().catch((e) => setError(errText(e)));
     api.info().then(setInfo);
     api.syncStatuses().then((list) => setStatuses(Object.fromEntries(list.map((s) => [s.siteId, s]))));
+    api.syncPaused().then(setSyncPaused).catch(() => {});
+    const offSyncPaused = onEvent<boolean>("sync:paused", setSyncPaused);
     const offStatus = onEvent<SyncStatus>("sync:status", (s) => {
       setStatuses((m) => ({ ...m, [s.siteId]: s }));
       if (s.state !== "running") {
@@ -83,6 +86,7 @@ export default function App() {
     loadScores();
     const offHealth = onEvent<HealthStatus>("health:status", (s) => { if (s.state !== "running") loadScores(); });
     return () => {
+      offSyncPaused();
       offStatus();
       offProgress();
       offCollect();
@@ -177,12 +181,14 @@ export default function App() {
           ) : page === "reports" ? (
             <ReportsPage key={site.id} site={site} openId={openReport} />
           ) : (
-            <OverviewPage key={site.id} site={site} status={statuses[site.id]} onChanged={reloadSites} onOpenHealth={() => setPage("health")} />
+            <OverviewPage key={site.id} site={site} status={statuses[site.id]} paused={syncPaused} onChanged={reloadSites} onOpenHealth={() => setPage("health")} />
           )}
         </main>
         {agentOpen && <AgentPanel site={site} account={account} modelRev={modelRev} onOpenSettings={() => setPage("settings")} onCreditsUsed={refreshAccount} />}
       </div>
-      <StatusBar status={site ? statuses[site.id] : undefined} progress={site ? progress[site.id] ?? null : null} info={info} siteId={site?.id} account={account} collect={collect}>
+      <StatusBar status={site ? statuses[site.id] : undefined} progress={site ? progress[site.id] ?? null : null} info={info} siteId={site?.id}
+        account={account} collect={collect} paused={syncPaused}
+        onStop={site ? () => api.stopSync(site.id).catch((e) => setError(errText(e))) : undefined}>
         <Notices onOpen={openNotice} />
       </StatusBar>
       {adding && (

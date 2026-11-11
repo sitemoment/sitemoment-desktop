@@ -46,6 +46,12 @@ type Property struct {
 type Query struct {
 	Start, End string // YYYY-MM-DD, inclusive
 	Dimensions []string
+	// OnPage, when set, is called before every page's HTTP request (most
+	// queries are one page; a few are not) and must return a release func
+	// to call once that page's request is done. This is where a caller
+	// plugs in a ratelimit.Limiter: Acquiring once for the whole Query
+	// would under-count a paginated query's real request rate.
+	OnPage func(ctx context.Context) (release func(), err error)
 }
 
 // Row is one Search Analytics row; Keys follow the query's Dimensions.
@@ -108,7 +114,19 @@ func (g *GSC) Query(ctx context.Context, token, property string, q Query) ([]Row
 		var page struct {
 			Rows []Row `json:"rows"`
 		}
-		if err := g.call(ctx, http.MethodPost, endpoint, token, body, &page); err != nil {
+		var release func()
+		if q.OnPage != nil {
+			r, err := q.OnPage(ctx)
+			if err != nil {
+				return nil, err
+			}
+			release = r
+		}
+		err := g.call(ctx, http.MethodPost, endpoint, token, body, &page)
+		if release != nil {
+			release()
+		}
+		if err != nil {
 			return nil, err
 		}
 		rows = append(rows, page.Rows...)

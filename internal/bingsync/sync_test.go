@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -104,5 +105,37 @@ func TestSyncSiteErrors(t *testing.T) {
 	unbound, _ := st.AddSite(ctx, "other.example.com", 1)
 	if _, err := s.SyncSite(ctx, unbound); !errors.Is(err, ErrNotBound) {
 		t.Fatalf("unbound: %v", err)
+	}
+}
+
+// spyLimiter is a Limiter stand-in that just records the keys Acquire was
+// called with.
+type spyLimiter struct {
+	mu   sync.Mutex
+	keys []string
+}
+
+func (l *spyLimiter) Acquire(_ context.Context, key string) (func(), error) {
+	l.mu.Lock()
+	l.keys = append(l.keys, key)
+	l.mu.Unlock()
+	return func() {}, nil
+}
+
+func TestSyncSiteUsesLimiterPerKey(t *testing.T) {
+	st, site := setup(t)
+	lim := &spyLimiter{}
+	s := &Syncer{Store: st, Keys: fakeKeys{"bing-k1": "k1"}, Bing: &fakeBing{}, Limiter: lim,
+		Now: func() time.Time { return time.Date(2026, 11, 10, 9, 0, 0, 0, time.UTC) }}
+	if _, err := s.SyncSite(ctx, site); err != nil {
+		t.Fatalf("SyncSite: %v", err)
+	}
+	if len(lim.keys) != 3 {
+		t.Fatalf("Acquire called %d times, want 3 (query, page, traffic)", len(lim.keys))
+	}
+	for _, k := range lim.keys {
+		if k != "k1" {
+			t.Fatalf("Acquire key = %q, want the Bing API key", k)
+		}
 	}
 }

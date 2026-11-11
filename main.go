@@ -27,6 +27,7 @@ import (
 	"github.com/sitemoment/sitemoment-desktop/internal/netproxy"
 	"github.com/sitemoment/sitemoment-desktop/internal/paths"
 	"github.com/sitemoment/sitemoment-desktop/internal/rank"
+	"github.com/sitemoment/sitemoment-desktop/internal/ratelimit"
 	"github.com/sitemoment/sitemoment-desktop/internal/secret"
 	"github.com/sitemoment/sitemoment-desktop/internal/store"
 	"github.com/sitemoment/sitemoment-desktop/internal/tasks"
@@ -170,11 +171,18 @@ func main() {
 		Provider: updates.ProviderConfig{Repo: env("SITEMOMENT_UPDATE_REPO", updates.Repo), HTTP: proxy.Client(10 * time.Minute)},
 	})
 	progress := func(p gscsync.Progress) { emit("sync:progress", p) }
+	// googleLimiter conservatively paces GSC and GA4 requests per Google
+	// account (they share the account's API quota), across every site and
+	// slice; bingLimiter does the same per Bing API key. Both sit in front
+	// of each client's own 429 backoff, to make a 429 unlikely in the
+	// first place when several sites share an account or key.
+	googleLimiter := &ratelimit.Limiter{Max: 4, Rate: 120, Period: time.Minute}
+	bingLimiter := &ratelimit.Limiter{Rate: 30, Period: time.Minute}
 	syncSvc := &app.SyncService{
 		Sources: []app.Source{
-			app.GSCSource{Syncer: &gscsync.Syncer{Store: st, Tokens: tokens, GSC: gsc, Progress: progress}},
-			app.GASource{Syncer: &gasync.Syncer{Store: st, Tokens: tokens, GA: ga, Progress: progress}},
-			app.BingSource{Syncer: &bingsync.Syncer{Store: st, Keys: bingKeys, Bing: bingc}},
+			app.GSCSource{Syncer: &gscsync.Syncer{Store: st, Tokens: tokens, GSC: gsc, Progress: progress, Limiter: googleLimiter}},
+			app.GASource{Syncer: &gasync.Syncer{Store: st, Tokens: tokens, GA: ga, Progress: progress, Limiter: googleLimiter}},
+			app.BingSource{Syncer: &bingsync.Syncer{Store: st, Keys: bingKeys, Bing: bingc, Limiter: bingLimiter}},
 		},
 		Store: st, Emit: emit, Ctx: ctx,
 	}
@@ -264,6 +272,7 @@ func main() {
 	// demand (with a short timeout) if it hasn't resolved yet.
 	go googleConfig.Refresh(ctx)
 	go app.RunSyncLoop(ctx, syncSvc, 6*time.Hour)
+	go app.RunBackfillLoop(ctx, syncSvc)
 	go updates.Run(ctx, updateSvc, 30*time.Second, time.Hour)
 	// Daily health checks at 08:00 (missed ones as soon as the app is open),
 	// task checks after them and a weekly report per site.
