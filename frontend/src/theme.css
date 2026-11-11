@@ -130,6 +130,7 @@ main { flex: 1; min-width: 0; display: flex; flex-direction: column; background:
 .row { display: flex; gap: 8px; align-items: center; margin-top: 10px; }
 .empty { grid-column: span 12; padding: 48px; text-align: center; color: var(--text-2); }
 .error { color: var(--bad); }
+.toolbar.notice { color: var(--warn); }
 .st-good { color: var(--good); } .st-warn { color: var(--warn); } .st-bad { color: var(--bad); }
 .spin { display: inline-block; width: 8px; height: 8px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: spin .8s linear infinite; vertical-align: -1px; }
 @keyframes spin { to { transform: rotate(360deg); } }

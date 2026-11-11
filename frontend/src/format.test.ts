@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
-  change, fmtBytes, fmtCompact, fmtCredits, fmtPct, guessBingSite, guessGAProperty, guessProperty, kdClass, metricNote, niceScale, posChange,
+  change, fmtBytes, fmtCompact, fmtCredits, fmtPct, guessBingSite, guessGAProperty, guessProperty, kdClass, metricNote, niceScale, nextHumanRun, posChange,
 } from "./format";
+import type { RunView } from "./types";
 
 describe("format", () => {
   it("compacts big numbers", () => {
@@ -76,5 +77,19 @@ describe("M2 formatting", () => {
     expect(guessBingSite(sites, "example.com")).toBe("https://www.example.com/");
     expect(guessBingSite(sites, "blog.example.com")).toBe("https://blog.example.com/");
     expect(guessBingSite(sites, "other.org")).toBe("");
+  });
+});
+
+describe("nextHumanRun", () => {
+  const run = (id: number, status: RunView["status"]): RunView => ({ id, collector: "google-serp", input: "{}", status, error: "", createdAt: 1, finishedAt: 0 });
+  it("shows a run that needs a human", () => {
+    expect(nextHumanRun(null, run(1, "need_human"))?.id).toBe(1);
+  });
+  it("clears it once that run moves on", () => {
+    expect(nextHumanRun(run(1, "need_human"), run(1, "ok"))).toBeNull();
+    expect(nextHumanRun(run(1, "need_human"), run(1, "error"))).toBeNull();
+  });
+  it("keeps it when another run changes", () => {
+    expect(nextHumanRun(run(1, "need_human"), run(2, "running"))?.id).toBe(1);
   });
 });

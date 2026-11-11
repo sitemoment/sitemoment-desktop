@@ -9,7 +9,8 @@ import { CollectorsPage } from "./pages/Collectors";
 import { KeywordsPage } from "./pages/Keywords";
 import { OverviewPage } from "./pages/Overview";
 import { SettingsPage } from "./pages/Settings";
-import type { Account, CollectorStats, Info, Site, SyncProgress, SyncStatus } from "./types";
+import { nextHumanRun } from "./format";
+import type { Account, CollectorStats, Info, RunView, Site, SyncProgress, SyncStatus } from "./types";
 
 type Page = "overview" | "keywords" | "collectors" | "settings";
 
@@ -22,6 +23,7 @@ export default function App() {
   const [progress, setProgress] = useState<Record<number, SyncProgress>>({});
   const [info, setInfo] = useState<Info | null>(null);
   const [collect, setCollect] = useState<CollectorStats | null>(null);
+  const [human, setHuman] = useState<RunView | null>(null);
   const [adding, setAdding] = useState(false);
   const [error, setError] = useState("");
   const [loggingIn, setLoggingIn] = useState(false);
@@ -65,10 +67,12 @@ export default function App() {
     });
     api.collectorStats().then(setCollect).catch(() => {});
     const offCollect = onEvent<CollectorStats>("collect:stats", setCollect);
+    const offRun = onEvent<RunView>("collect:run", (r) => setHuman((cur) => nextHumanRun(cur, r)));
     return () => {
       offStatus();
       offProgress();
       offCollect();
+      offRun();
     };
   }, [reloadSites]);
 
@@ -122,6 +126,12 @@ export default function App() {
             <span className={page === "settings" ? "on" : ""}>设置</span>
           </div>
           {error && <div className="toolbar error">{error}</div>}
+          {human && (
+            <div className="toolbar notice">
+              <span className="grow">本机浏览器在查「{human.collector}」时遇到人工验证：请在弹出的窗口里完成，2 分钟内有效。</span>
+              <button className="btn" onClick={() => api.revealRun(human.id).catch(() => setHuman(null))}>显示窗口</button>
+            </div>
+          )}
           {page === "collectors" ? (
             <CollectorsPage />
           ) : page === "settings" ? (
