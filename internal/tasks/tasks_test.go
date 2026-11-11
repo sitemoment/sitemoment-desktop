@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -201,6 +202,71 @@ func TestIndexedConditionIgnoresInspectionFromBeforeTheTaskStarted(t *testing.T)
 	ok(t, err)
 	if len(done) != 1 || done[0].Status != StatusPassed {
 		t.Fatalf("done = %+v", done)
+	}
+}
+
+func TestGSCConditionCapsWindowAtDueDate(t *testing.T) {
+	s, site, now := setup(t, "example.com")
+	v, err := s.Propose(ctx, Proposal{SiteID: site.ID, Title: "多拿点击", Days: 5, Open: true,
+		Conditions: []Condition{{Kind: KindMetric, Metric: "clicks", Op: "gte", Value: 100, Window: 7}}})
+	ok(t, err)
+	due := v.DueAt
+	// Inside the due window: 40 clicks. After the due date: another 200, which must not count.
+	ok(t, s.Store.ReplaceGSC(ctx, site.ID, "date", "2026-11-10", "2026-11-20", []store.GSCRow{
+		{Day: "2026-11-12", Clicks: 40, Impressions: 900},
+		{Day: "2026-11-20", Clicks: 200, Impressions: 900},
+	}, 1))
+	*now = now.AddDate(0, 0, 10)
+	done, err := s.Evaluate(ctx, site.ID)
+	ok(t, err)
+	if len(done) != 1 || done[0].Status != StatusFailed {
+		t.Fatalf("done = %+v (due %d)", done, due)
+	}
+	if cur := done[0].Outcomes[0].Current; cur == nil || *cur != 40 {
+		t.Fatalf("the GSC window must not extend past the due date: outcome = %+v", done[0].Outcomes[0])
+	}
+}
+
+func TestStatusConditionIgnoredAfterDueDate(t *testing.T) {
+	s, site, now := setup(t, "127.0.0.1")
+	var gone atomic.Bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if gone.Load() {
+			w.WriteHeader(410)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer srv.Close()
+	v, err := s.Propose(ctx, Proposal{SiteID: site.ID, Title: "旧网址返回 410", Days: 3, Open: true,
+		Conditions: []Condition{{Kind: KindStatus, URL: srv.URL + "/old", Status: 410}}})
+	ok(t, err)
+	if v.Outcomes[0].State != StateUnmet {
+		t.Fatalf("expected unmet before the fix: %+v", v.Outcomes[0])
+	}
+	*now = now.AddDate(0, 0, 10) // well past the 3-day due date
+	gone.Store(true)             // fixed, but only now — after the deadline
+	done, err := s.Evaluate(ctx, site.ID)
+	ok(t, err)
+	if len(done) != 1 || done[0].Status != StatusFailed {
+		t.Fatalf("a url_status fix made after the due date must not retroactively pass the task: %+v", done)
+	}
+}
+
+func TestIndexedConditionIgnoredAfterDueDate(t *testing.T) {
+	s, site, now := setup(t, "127.0.0.1")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("ok")) }))
+	defer srv.Close()
+	v, err := s.Propose(ctx, Proposal{SiteID: site.ID, Title: "新页面收录", Days: 3, Open: true,
+		Conditions: []Condition{{Kind: KindIndexed, URL: srv.URL + "/new"}}})
+	ok(t, err)
+	due := v.DueAt
+	*now = now.AddDate(0, 0, 10) // well past the 3-day due date
+	ok(t, s.Store.SetInspection(ctx, site.ID, srv.URL+"/new", "PASS", "Submitted and indexed", now.Unix()))
+	done, err := s.Evaluate(ctx, site.ID)
+	ok(t, err)
+	if len(done) != 1 || done[0].Status != StatusFailed {
+		t.Fatalf("an inspection recorded after the due date (%d) must not retroactively pass the task: %+v", due, done)
 	}
 }
 

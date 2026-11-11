@@ -84,7 +84,7 @@ func (s *Service) check(ctx context.Context, site store.Site, t store.Task, c Co
 	case KindPosition, KindMetric:
 		return s.checkGSC(ctx, site, t, c)
 	case KindStatus:
-		return s.checkStatus(ctx, c)
+		return s.checkStatus(ctx, t, c)
 	case KindIndexed:
 		return s.checkIndexed(ctx, site, t, c)
 	}
@@ -100,6 +100,10 @@ func (s *Service) checkGSC(ctx context.Context, site store.Site, t store.Task, c
 	latest, err := s.Store.LatestDay(ctx, site.ID, "gsc", sliceOf(c))
 	if err != nil || latest == "" {
 		return Outcome{State: StatePending, Note: "本机还没有 Search Console 数据"}
+	}
+	// Never measure past the due date: data from after it must not retroactively pass a task.
+	if due := day(time.Unix(t.DueAt, 0)); t.DueAt > 0 && latest > due {
+		latest = due
 	}
 	start := day(time.Unix(t.StartedAt, 0))
 	if latest < start {
@@ -129,7 +133,7 @@ func (s *Service) checkGSC(ctx context.Context, site store.Site, t store.Task, c
 	return o
 }
 
-func (s *Service) checkStatus(ctx context.Context, c Condition) Outcome {
+func (s *Service) checkStatus(ctx context.Context, t store.Task, c Condition) Outcome {
 	if s.Fetcher == nil {
 		return Outcome{State: StatePending, Note: "不能联网检查"}
 	}
@@ -148,6 +152,12 @@ func (s *Service) checkStatus(ctx context.Context, c Condition) Outcome {
 	}
 	if first == c.Status || (c.Status == 301 && first == 308) {
 		o.State = StatePass
+	}
+	// A live check only ever reflects right now; after the due date it cannot
+	// prove the URL was already right by the deadline, so it must not pass.
+	if o.State == StatePass && t.DueAt > 0 && s.now().Unix() > t.DueAt {
+		o.State = StateUnmet
+		o.Note += "（检查发生在到期之后，不能证明到期前已经达标）"
 	}
 	return o
 }
@@ -169,6 +179,10 @@ func (s *Service) checkIndexed(ctx context.Context, site store.Site, t store.Tas
 	}
 	when := time.Unix(p.IndexCheckedAt, 0).Format("2006-01-02")
 	if p.IndexVerdict == "PASS" {
+		if t.DueAt > 0 && p.IndexCheckedAt > t.DueAt {
+			// Indexed only after the deadline: does not prove it was already indexed by then.
+			return Outcome{State: StateUnmet, Note: "网址检查发生在到期之后，不能证明到期前已经收录（" + when + "）"}
+		}
 		return Outcome{State: StatePass, Note: "谷歌已收录（网址检查 " + when + "）"}
 	}
 	reason := p.IndexCoverage
