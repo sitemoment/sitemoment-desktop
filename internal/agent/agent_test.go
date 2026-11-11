@@ -399,6 +399,78 @@ func TestStepLimitForcesAnAnswer(t *testing.T) {
 	}
 }
 
+func TestResumeFromWithinTheConfirmNeededEventSucceeds(t *testing.T) {
+	// A real UI listens for confirm_needed and may call Resume as soon as it
+	// arrives. That must see the session already in awaiting_confirm, not
+	// still "running" (which would make Resume refuse it).
+	st := openStore(t)
+	site, err := st.AddSite(ctx, "example.com", 1)
+	ok(t, err)
+	sess, err := st.CreateAgentSession(ctx, site.ID, ModeConfirm, 1)
+	ok(t, err)
+	cl := &fakeCloud{signedIn: true, quote: 3, charge: 1.5}
+	model := &fakeModel{replies: []func(context.Context, llm.Request) (*llm.Reply, error){
+		call("", tc("c1", "lookup_keywords", `{"keywords":["x"]}`)),
+		say("ok"),
+	}}
+	var a *Agent
+	var resumeCalled bool
+	var resumeErr error
+	emit := func(name string, data any) {
+		if name != EventName {
+			return
+		}
+		ev, ok := data.(map[string]any)
+		if !ok || ev["type"] != "confirm_needed" || resumeCalled {
+			return
+		}
+		resumeCalled = true
+		resumeErr = a.Resume(ctx, sess.ID, false)
+	}
+	a = New(st, func(context.Context) (llm.Model, error) { return model, nil }, &Deps{Cloud: cl}, emit)
+	a.Now = func() time.Time { return time.Date(2026, 11, 10, 9, 0, 0, 0, time.UTC) }
+	ok(t, a.Start(ctx, sess.ID, "x"))
+	a.Wait()
+	if !resumeCalled {
+		t.Fatal("confirm_needed never fired")
+	}
+	if resumeErr != nil {
+		t.Fatalf("resume from inside the confirm_needed handler: %v", resumeErr)
+	}
+}
+
+func TestReleaseDoesNotRemoveANewerTurnsCancel(t *testing.T) {
+	st := openStore(t)
+	site, err := st.AddSite(ctx, "example.com", 1)
+	ok(t, err)
+	sess, err := st.CreateAgentSession(ctx, site.ID, ModeConfirm, 1)
+	ok(t, err)
+	sess, err = st.ClaimAgentTurn(ctx, sess.ID, false, 2)
+	ok(t, err)
+
+	a := &Agent{Store: st}
+	oldTurn := &turn{sess: sess, n: sess.Turn, cancel: func(error) {}}
+	newTurn := &turn{sess: sess, n: sess.Turn + 1, cancel: func(error) {}}
+	a.mu.Lock()
+	a.cancels = map[int64]*turn{sess.ID: oldTurn}
+	a.mu.Unlock()
+
+	// Simulate the race: a newer turn claims the slot before the old turn's
+	// release runs (e.g. the user resumed right after an earlier pause).
+	a.mu.Lock()
+	a.cancels[sess.ID] = newTurn
+	a.mu.Unlock()
+
+	a.release(ctx, oldTurn, store.AgentIdle, "")
+
+	a.mu.Lock()
+	got := a.cancels[sess.ID]
+	a.mu.Unlock()
+	if got != newTurn {
+		t.Fatalf("the old turn's release removed the newer turn's cancel: got %v, want %v", got, newTurn)
+	}
+}
+
 func TestStopEndsTheTurn(t *testing.T) {
 	started := make(chan struct{})
 	r := newRig(t, ModeConfirm, func(ctx context.Context, _ llm.Request) (*llm.Reply, error) {

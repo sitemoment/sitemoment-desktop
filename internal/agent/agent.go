@@ -50,8 +50,11 @@ type Agent struct {
 	Now      func() time.Time
 	MaxSteps int
 
-	mu      sync.Mutex
-	cancels map[int64]context.CancelCauseFunc
+	mu sync.Mutex
+	// cancels maps a session to the turn currently running on it, so a
+	// turn's own release only ever removes its own entry (never a newer
+	// turn's, started after it released).
+	cancels map[int64]*turn
 	wg      sync.WaitGroup
 }
 
@@ -209,10 +212,10 @@ func (a *Agent) Resume(ctx context.Context, sessionID int64, approve bool) error
 // Stop cancels the session's running turn (no-op when none runs).
 func (a *Agent) Stop(sessionID int64) {
 	a.mu.Lock()
-	cancel := a.cancels[sessionID]
+	t := a.cancels[sessionID]
 	a.mu.Unlock()
-	if cancel != nil {
-		cancel(ErrStopped)
+	if t != nil {
+		t.cancel(ErrStopped)
 	}
 }
 
@@ -220,14 +223,14 @@ func (a *Agent) Stop(sessionID int64) {
 func (a *Agent) begin(sess store.AgentSession, model llm.Model) (context.Context, *turn) {
 	ctx, cancel := context.WithCancelCause(context.Background())
 	ctx, stopTimer := context.WithTimeout(ctx, turnTimeout)
+	t := &turn{sess: sess, n: sess.Turn, model: model, approved: map[string]bool{}, cancel: cancel}
 	a.mu.Lock()
 	if a.cancels == nil {
-		a.cancels = map[int64]context.CancelCauseFunc{}
+		a.cancels = map[int64]*turn{}
 	}
-	a.cancels[sess.ID] = cancel
+	a.cancels[sess.ID] = t
 	a.mu.Unlock()
 	context.AfterFunc(ctx, stopTimer)
-	t := &turn{sess: sess, n: sess.Turn, model: model, approved: map[string]bool{}, cancel: cancel}
 	t.env = &Env{Deps: a.Deps}
 	if sess.SiteID != 0 {
 		if site, err := a.Store.Site(ctx, sess.SiteID); err == nil {
@@ -365,8 +368,11 @@ func (a *Agent) step(ctx context.Context, t *turn, step int, calls []llm.ToolCal
 	}
 	p := pendingState{Step: step, TurnSpent: t.spent, Calls: held}
 	raw, _ := json.Marshal(p)
-	a.emit(t, "confirm_needed", map[string]any{"pending": p.view()})
+	// Write the awaiting_confirm status before telling the UI: a listener
+	// may call Resume as soon as it sees confirm_needed, and Resume's
+	// ClaimAgentTurn requires the DB to already show awaiting_confirm.
 	a.release(ctx, t, store.AgentAwaitingConfirm, string(raw))
+	a.emit(t, "confirm_needed", map[string]any{"pending": p.view()})
 	return true
 }
 
@@ -541,10 +547,17 @@ func (a *Agent) stop(ctx context.Context, t *turn) {
 
 func (a *Agent) release(ctx context.Context, t *turn, status, pending string) {
 	ctx = context.WithoutCancel(ctx)
-	_ = a.Store.ReleaseAgentTurn(ctx, t.sess.ID, status, pending, a.now().Unix())
+	// Clear this turn's own cancel entry before writing the DB status: a
+	// newer turn (started once the DB shows idle/awaiting_confirm) can only
+	// register its own entry after this write is visible, so checking
+	// identity here first means a stale release can never delete a newer
+	// turn's entry.
 	a.mu.Lock()
-	delete(a.cancels, t.sess.ID)
+	if a.cancels[t.sess.ID] == t {
+		delete(a.cancels, t.sess.ID)
+	}
 	a.mu.Unlock()
+	_ = a.Store.ReleaseAgentTurn(ctx, t.sess.ID, status, pending, a.now().Unix())
 	a.emit(t, "turn_finished", map[string]any{"status": status, "credits": t.spent})
 	t.cancel(nil) // frees the turn's timer
 }
