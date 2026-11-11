@@ -105,18 +105,22 @@ func TestPositionTaskPassesOnNewData(t *testing.T) {
 		t.Fatalf("confirmed twice: %v", err)
 	}
 
-	// Data after the task opened: 12 first, then 8.
+	// Data after the task opened, but less than 7 full days of it once the
+	// newest 2 provisional days are excluded: still pending, even though 12
+	// already beats the baseline of 14.
 	*now = now.AddDate(0, 0, 5)
 	ok(t, s.Store.ReplaceGSC(ctx, site.ID, "query", "2026-11-10", "2026-11-12", []store.GSCRow{
 		{Day: "2026-11-11", Query: "thumbnail maker", Impressions: 100, Position: 12}}, 1))
 	done, err := s.Evaluate(ctx, site.ID)
 	ok(t, err)
 	v, _ = s.Check(ctx, v.ID)
-	if len(done) != 0 || v.Status != StatusOpen || v.Outcomes[0].State != StateUnmet || *v.Outcomes[0].Current != 12 || *v.Outcomes[0].Baseline != 14 {
-		t.Fatalf("after 12: %+v", v.Outcomes)
+	if len(done) != 0 || v.Status != StatusOpen || v.Outcomes[0].State != StatePending || !strings.Contains(v.Outcomes[0].Note, "不满 7 天") {
+		t.Fatalf("too little data yet: %+v", v.Outcomes)
 	}
-	ok(t, s.Store.ReplaceGSC(ctx, site.ID, "query", "2026-11-13", "2026-11-13", []store.GSCRow{
-		{Day: "2026-11-13", Query: "thumbnail maker", Impressions: 300, Position: 7}}, 1))
+
+	// 9 raw days in (7 usable once the newest 2 are excluded): enough data now, and it passes.
+	ok(t, s.Store.ReplaceGSC(ctx, site.ID, "query", "2026-11-13", "2026-11-20", []store.GSCRow{
+		{Day: "2026-11-16", Query: "thumbnail maker", Impressions: 300, Position: 7}}, 1))
 	done, err = s.Evaluate(ctx, site.ID)
 	ok(t, err)
 	if len(done) != 1 || done[0].Status != StatusPassed || *done[0].Outcomes[0].Current != 8.3 || done[0].DoneAt != now.Unix() {
@@ -132,7 +136,9 @@ func TestTaskFailsWhenDue(t *testing.T) {
 	if v.Status != StatusOpen || v.Outcomes[0].State != StatePending {
 		t.Fatalf("open = %+v", v)
 	}
-	ok(t, s.Store.ReplaceGSC(ctx, site.ID, "date", "2026-11-10", "2026-11-16", []store.GSCRow{{Day: "2026-11-12", Clicks: 40, Impressions: 900}}, 1))
+	// Synced a bit past the due date (2026-11-17), so the 2 newest days excluded as
+	// provisional still leave exactly the 7 days needed up to the due date.
+	ok(t, s.Store.ReplaceGSC(ctx, site.ID, "date", "2026-11-10", "2026-11-19", []store.GSCRow{{Day: "2026-11-12", Clicks: 40, Impressions: 900}}, 1))
 	*now = now.AddDate(0, 0, 7)
 	done, err := s.Evaluate(ctx, site.ID)
 	ok(t, err)
@@ -207,16 +213,20 @@ func TestIndexedConditionIgnoresInspectionFromBeforeTheTaskStarted(t *testing.T)
 
 func TestGSCConditionCapsWindowAtDueDate(t *testing.T) {
 	s, site, now := setup(t, "example.com")
-	v, err := s.Propose(ctx, Proposal{SiteID: site.ID, Title: "多拿点击", Days: 5, Open: true,
-		Conditions: []Condition{{Kind: KindMetric, Metric: "clicks", Op: "gte", Value: 100, Window: 7}}})
+	// Days and Window are both >= gscMinDays so the due-date cap, not the
+	// minimum-days gate, is what has to exclude the late data below.
+	v, err := s.Propose(ctx, Proposal{SiteID: site.ID, Title: "多拿点击", Days: 9, Open: true,
+		Conditions: []Condition{{Kind: KindMetric, Metric: "clicks", Op: "gte", Value: 100, Window: 10}}})
 	ok(t, err)
 	due := v.DueAt
-	// Inside the due window: 40 clicks. After the due date: another 200, which must not count.
-	ok(t, s.Store.ReplaceGSC(ctx, site.ID, "date", "2026-11-10", "2026-11-20", []store.GSCRow{
+	// Inside the due window: 40 clicks. After the due date, but recent enough
+	// that the newest-2-days provisional buffer alone would not exclude it: another
+	// 200, which must still not count towards the task.
+	ok(t, s.Store.ReplaceGSC(ctx, site.ID, "date", "2026-11-10", "2026-11-25", []store.GSCRow{
 		{Day: "2026-11-12", Clicks: 40, Impressions: 900},
 		{Day: "2026-11-20", Clicks: 200, Impressions: 900},
 	}, 1))
-	*now = now.AddDate(0, 0, 10)
+	*now = now.AddDate(0, 0, 20)
 	done, err := s.Evaluate(ctx, site.ID)
 	ok(t, err)
 	if len(done) != 1 || done[0].Status != StatusFailed {

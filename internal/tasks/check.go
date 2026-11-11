@@ -91,25 +91,46 @@ func (s *Service) check(ctx context.Context, site store.Site, t store.Task, c Co
 	return Outcome{State: StatePending, Note: "未知的条件类型"}
 }
 
+// gscFinalDelay: the newest synced days can still be revised by Google, so
+// they are excluded from every window a condition measures.
+// gscMinDays: a GSC condition stays pending until it has this many full,
+// usable days of data after the task started (or the whole window, if
+// that is shorter).
+const (
+	gscFinalDelay = 2
+	gscMinDays    = 7
+)
+
 // checkGSC measures from the day the task opened (at most Window days, up
-// to the newest synced day): only data after the change counts.
+// to the newest usable synced day): only data after the change counts, the
+// newest gscFinalDelay days are left out as provisional, and it stays
+// pending until there are at least gscMinDays of them.
 func (s *Service) checkGSC(ctx context.Context, site store.Site, t store.Task, c Condition) Outcome {
 	if site.GSCProperty == "" {
 		return Outcome{State: StatePending, Note: "这个站点没有绑定 Search Console"}
 	}
-	latest, err := s.Store.LatestDay(ctx, site.ID, "gsc", sliceOf(c))
-	if err != nil || latest == "" {
+	raw, err := s.Store.LatestDay(ctx, site.ID, "gsc", sliceOf(c))
+	if err != nil || raw == "" {
 		return Outcome{State: StatePending, Note: "本机还没有 Search Console 数据"}
 	}
+	rawT, err := time.Parse(store.DayLayout, raw)
+	if err != nil {
+		return Outcome{State: StatePending, Note: "本机的 Search Console 数据日期有问题"}
+	}
+	latest := day(rawT.AddDate(0, 0, -gscFinalDelay)) // the newest days can still be revised
+	start := day(time.Unix(t.StartedAt, 0))
 	// Never measure past the due date: data from after it must not retroactively pass a task.
 	if due := day(time.Unix(t.DueAt, 0)); t.DueAt > 0 && latest > due {
 		latest = due
 	}
-	start := day(time.Unix(t.StartedAt, 0))
 	if latest < start {
 		return Outcome{State: StatePending, Note: fmt.Sprintf("等 Search Console 同步到 %s 之后的数据（GSC 晚 2–3 天）", start)}
 	}
+	startT, _ := time.Parse(store.DayLayout, start)
 	end, _ := time.Parse(store.DayLayout, latest)
+	if minDays := min(gscMinDays, c.Window); int(end.Sub(startT).Hours()/24)+1 < minDays {
+		return Outcome{State: StatePending, Note: fmt.Sprintf("任务开始后还不满 %d 天可用的 Search Console 数据，暂时不判断", minDays)}
+	}
 	from := day(end.AddDate(0, 0, -(c.Window - 1)))
 	if from < start {
 		from = start
