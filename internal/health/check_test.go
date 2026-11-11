@@ -180,18 +180,72 @@ func TestCheckFindsRegressions(t *testing.T) {
 	if d := pages[s.srv.URL+"/d"]; d.Status != 404 || d.OK || d.LastOK != first.StartedAt {
 		t.Fatalf("memory of /d = %+v", d)
 	}
-	// The same state a day later: nothing is new any more, and /d was already lost.
+	// The same state a day later: nothing is new any more, but lost_pages and
+	// new_noindex keep being reported while the pages stay broken/noindex and
+	// are still within 30 days of having last been OK; canonical only fires
+	// on an actual change, so it does not fire again.
 	now = now.Add(24 * time.Hour)
 	third, err := c.Check(ctx, ws, "schedule", nil)
 	ok(t, err)
-	issues, _ = st.CrawlIssues(ctx, third.ID)
+	issues, err = st.CrawlIssues(ctx, third.ID)
+	ok(t, err)
+	got = codes(issues)
 	for _, is := range issues {
 		if is.New {
 			t.Errorf("%s is new again", is.Code)
 		}
-		if is.Code == CodeLost || is.Code == CodeNewNoindex {
-			t.Errorf("%s reported twice: %+v", is.Code, is)
-		}
+	}
+	if lost := got[CodeLost]; lost.Count != 2 {
+		t.Fatalf("lost pages must keep being reported within 30 days of last_ok: %+v", lost)
+	}
+	if n := got[CodeNewNoindex]; n.Count != 1 {
+		t.Fatalf("noindex must keep being reported while the page stays noindex: %+v", n)
+	}
+	if _, found := got[CodeCanonical]; found {
+		t.Fatal("canonical did not change again: must not be reported a second time")
+	}
+}
+
+// TestLostPageStopsBeingReportedAfter30Days: a page that keeps failing is
+// reported every check while last_ok is within 30 days, then drops out.
+func TestLostPageStopsBeingReportedAfter30Days(t *testing.T) {
+	st := openStore(t)
+	s := newSite(t)
+	now := time.Date(2026, 11, 10, 8, 0, 0, 0, time.Local)
+	c := checker(t, st, s, &now)
+	ws, err := st.AddSite(ctx, "example.com", 1)
+	ok(t, err)
+	_, err = c.Check(ctx, ws, "manual", nil)
+	ok(t, err)
+
+	s.edit(func() { delete(s.pages, "/a") }) // /a now 404, still linked
+	now = now.Add(24 * time.Hour)
+	second, err := c.Check(ctx, ws, "schedule", nil)
+	ok(t, err)
+	issues, err := st.CrawlIssues(ctx, second.ID)
+	ok(t, err)
+	if is := codes(issues)[CodeLost]; is.Count == 0 {
+		t.Fatalf("expected /a reported lost right away: %+v", issues)
+	}
+
+	// A few days later, still failing and well within 30 days: still reported.
+	now = now.Add(5 * 24 * time.Hour)
+	third, err := c.Check(ctx, ws, "schedule", nil)
+	ok(t, err)
+	issues, err = st.CrawlIssues(ctx, third.ID)
+	ok(t, err)
+	if is := codes(issues)[CodeLost]; is.Count == 0 {
+		t.Fatalf("a page failing for less than 30 days must keep being reported: %+v", issues)
+	}
+
+	// Past 30 days of continuous failure: stops being reported.
+	now = now.Add(26 * 24 * time.Hour)
+	fourth, err := c.Check(ctx, ws, "schedule", nil)
+	ok(t, err)
+	issues, err = st.CrawlIssues(ctx, fourth.ID)
+	ok(t, err)
+	if is := codes(issues)[CodeLost]; is.Count != 0 {
+		t.Fatalf("a page failing for over 30 days must stop being reported: %+v", is)
 	}
 }
 

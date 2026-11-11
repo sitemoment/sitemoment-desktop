@@ -30,20 +30,29 @@ func canonicalOf(canonical, finalURL string) string {
 	return strings.TrimSuffix(c, "/")
 }
 
+// lostRetention: a page that keeps failing or stays noindex is reported
+// every check as long as it was last OK within this long; older than that,
+// it ages out (it is presumably gone for good, not a regression any more).
+const lostRetention = 30 * 24 * 60 * 60 // seconds
+
 // regressed lists the crawled pages that got worse since the previous check:
-// noindex that was not there, a canonical pointing somewhere new, and the
-// previously OK pages that now fail (to be traced, with unseen ones).
-func regressed(prev map[string]store.Page, res *rank.CrawlResult) (noindex, canonical, failing []string) {
+// pages noindex now, a canonical pointing somewhere new (once, on the check
+// that changed it), and pages that now fail (to be traced, with unseen
+// ones). Once a page has a history of being OK (LastOK > 0), noindex and
+// failing keep being reported on every check for up to lostRetention after
+// it was last OK, not just the first time.
+func regressed(prev map[string]store.Page, res *rank.CrawlResult, now int64) (noindex, canonical, failing []string) {
+	cutoff := now - lostRetention
 	for _, p := range res.Pages {
 		old, ok := prev[p.URL]
-		if !ok || !old.OK || p.Error != "" {
+		if !ok || old.LastOK == 0 || old.LastOK < cutoff || p.Error != "" {
 			continue
 		}
 		switch {
 		case p.Status >= 400:
 			failing = append(failing, p.URL)
 		case p.OK() && p.Redirects == 0:
-			if p.Noindex && !old.Noindex {
+			if p.Noindex {
 				noindex = append(noindex, p.URL)
 			}
 			if !p.Noindex && !old.Noindex && canonicalOf(p.Canonical, p.FinalURL) != canonicalOf(old.Canonical, old.FinalURL) {
@@ -61,17 +70,21 @@ func orSelf(c string) string {
 	return c
 }
 
-// unseenOK lists previously OK pages this crawl did not reach, at most
-// limit. Pages robots.txt now disallows are left out: rechecking them would
-// fetch a URL our crawler itself would skip.
-func unseenOK(prev map[string]store.Page, res *rank.CrawlResult, limit int) []string {
+// unseenOK lists pages with a history of being OK (LastOK > 0, within
+// lostRetention) that this crawl did not reach, at most limit. A page keeps
+// being traced (and so keeps being reportable as lost) on every check for
+// as long as it is within that window, not just the first time it goes
+// missing. Pages robots.txt now disallows are left out: rechecking them
+// would fetch a URL our crawler itself would skip.
+func unseenOK(prev map[string]store.Page, res *rank.CrawlResult, limit int, now int64) []string {
+	cutoff := now - lostRetention
 	crawled := make(map[string]bool, len(res.Pages))
 	for _, p := range res.Pages {
 		crawled[p.URL] = true
 	}
 	var out []string
 	for u, p := range prev {
-		if p.OK && !crawled[u] && res.Allowed(u) {
+		if p.LastOK > 0 && p.LastOK >= cutoff && !crawled[u] && res.Allowed(u) {
 			out = append(out, u)
 		}
 	}

@@ -168,8 +168,8 @@ func (c *Checker) run(ctx context.Context, site store.Site, now time.Time, watch
 	for _, p := range res.Pages {
 		rows = append(rows, pageRow(p, ts))
 	}
-	noindex, canonical, failing := regressed(mem, res)
-	unseen := unseenOK(mem, res, orDefault(c.Recheck, defaultRecheck))
+	noindex, canonical, failing := regressed(mem, res, ts)
+	unseen := unseenOK(mem, res, orDefault(c.Recheck, defaultRecheck), ts)
 	sum.Rechecked = len(unseen)
 	lost, traced := lostPages(ctx, c.Fetcher, append(failing, unseen...), res, mem, ts)
 	if err := c.Store.SavePages(ctx, site.ID, append(rows, traced...)); err != nil {
