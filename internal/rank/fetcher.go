@@ -14,6 +14,7 @@ import (
 	"net/netip"
 	"net/url"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -32,6 +33,10 @@ type FetcherConfig struct {
 	// httptest servers on 127.0.0.1 and random ports. Never set it in
 	// production.
 	AllowPrivate bool
+	// Proxy picks a forward proxy per request (netproxy.Resolver.Proxy);
+	// nil, or a nil URL, means direct. A proxied request gets the same
+	// checks as a direct one before anything is sent (see Fetcher).
+	Proxy func(*http.Request) (*url.URL, error)
 }
 
 // DefaultFetcherConfig is the production configuration from the spec.
@@ -79,9 +84,28 @@ func (e *FetchError) Unwrap() error { return e.Err }
 // refuses non-public addresses, dials exactly the checked address, allows
 // only ports 80 and 443 and re-checks every redirect hop. A Fetcher is safe
 // for concurrent use and reuses connections.
+//
+// With a Proxy (the user's system proxy), every request and every redirect
+// hop is still checked first: the host is resolved locally, all its
+// addresses must be public and the port 80 or 443. Only then is the request
+// handed to the proxy, on a separate transport that dials nothing but the
+// proxies the fetcher was told to use (they usually listen on 127.0.0.1,
+// which the guard would refuse as a destination). The proxy then connects
+// to the host by name with its own DNS, so unlike the direct path the
+// connection is not pinned to the address that was checked: a name that
+// resolves to something else at the proxy (DNS rebinding, split-horizon
+// DNS) is not caught. Resolving every name to a public address locally
+// still rules out plain internal names and literal private addresses.
 type Fetcher struct {
 	cfg       FetcherConfig
 	transport *http.Transport
+	// proxied carries requests cfg.Proxy sends to a proxy; rt picks
+	// between it and transport per request.
+	proxied *http.Transport
+	rt      http.RoundTripper
+	// proxyAddrs is the set of proxy host:port the proxied transport may
+	// dial.
+	proxyAddrs sync.Map
 	// lookup resolves a host name; replaced in tests.
 	lookup func(ctx context.Context, host string) ([]netip.Addr, error)
 	// blocked decides whether an address is refused; nil allows everything.
@@ -119,12 +143,13 @@ func NewFetcher(cfg FetcherConfig) *Fetcher {
 		f.blocked = isBlockedAddr
 	}
 	dialer := &net.Dialer{Timeout: 5 * time.Second, KeepAlive: 30 * time.Second, Control: f.control}
+	tlsConfig := &tls.Config{MinVersion: tls.VersionTLS12}
 	f.transport = &http.Transport{
 		Proxy: nil, // never let an environment proxy bypass the guard
 		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
 			return f.dial(ctx, dialer, network, addr)
 		},
-		TLSClientConfig:        &tls.Config{MinVersion: tls.VersionTLS12},
+		TLSClientConfig:        tlsConfig,
 		TLSHandshakeTimeout:    5 * time.Second,
 		ForceAttemptHTTP2:      true,
 		MaxIdleConns:           64,
@@ -132,7 +157,111 @@ func NewFetcher(cfg FetcherConfig) *Fetcher {
 		IdleConnTimeout:        30 * time.Second,
 		MaxResponseHeaderBytes: 64 << 10,
 	}
+	f.rt = f.transport
+	if cfg.Proxy != nil {
+		proxyDialer := &net.Dialer{Timeout: 5 * time.Second, KeepAlive: 30 * time.Second}
+		f.proxied = &http.Transport{
+			// Exactly the proxy routeTrip picked and checked the
+			// destination for; cfg.Proxy is not asked again.
+			Proxy: func(req *http.Request) (*url.URL, error) {
+				if u, ok := req.Context().Value(proxyKey{}).(*url.URL); ok {
+					return u, nil
+				}
+				return nil, &FetchError{Reason: "refused", Err: errors.New("proxied request without a proxy")}
+			},
+			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+				if _, ok := f.proxyAddrs.Load(addr); !ok {
+					return nil, &FetchError{Reason: "blocked_address", Err: fmt.Errorf("%s is not a proxy in use", addr)}
+				}
+				return proxyDialer.DialContext(ctx, network, addr)
+			},
+			TLSClientConfig:        tlsConfig,
+			TLSHandshakeTimeout:    5 * time.Second,
+			ForceAttemptHTTP2:      true,
+			MaxIdleConns:           64,
+			MaxIdleConnsPerHost:    4,
+			IdleConnTimeout:        30 * time.Second,
+			MaxResponseHeaderBytes: 64 << 10,
+		}
+		f.rt = roundTripFunc(f.routeTrip)
+	}
 	return f
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (fn roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return fn(r) }
+
+// proxyKey carries the checked proxy URL from routeTrip to the proxied
+// transport.
+type proxyKey struct{}
+
+// routeTrip sends req direct (guarded at dial time) or, when cfg.Proxy
+// picks a proxy, checks the destination and hands req to the proxied
+// transport. It runs for every redirect hop.
+func (f *Fetcher) routeTrip(req *http.Request) (*http.Response, error) {
+	pu, err := f.cfg.Proxy(req)
+	if err != nil {
+		return nil, &FetchError{Reason: "refused", Err: fmt.Errorf("proxy: %w", err)}
+	}
+	if pu == nil {
+		return f.transport.RoundTrip(req)
+	}
+	if err := f.checkDestination(req.Context(), req.URL); err != nil {
+		return nil, err
+	}
+	f.proxyAddrs.Store(proxyAddr(pu), struct{}{})
+	return f.proxied.RoundTrip(req.WithContext(context.WithValue(req.Context(), proxyKey{}, pu)))
+}
+
+// proxyAddr is the host:port http.Transport dials for proxy u.
+func proxyAddr(u *url.URL) string {
+	port := u.Port()
+	if port == "" {
+		port = map[string]string{"http": "80", "https": "443", "socks5": "1080", "socks5h": "1080"}[strings.ToLower(u.Scheme)]
+	}
+	return net.JoinHostPort(u.Hostname(), port)
+}
+
+// checkDestination applies the dial-time guard to a request that will go
+// through a proxy: port 80/443 and every address of the host public.
+func (f *Fetcher) checkDestination(ctx context.Context, u *url.URL) error {
+	if err := checkURL(u, f.anyPort); err != nil {
+		return &FetchError{Reason: "bad_url", Err: err}
+	}
+	port := u.Port()
+	if port == "" {
+		port = map[string]string{"http": "80", "https": "443"}[strings.ToLower(u.Scheme)]
+	}
+	if !f.anyPort && port != "80" && port != "443" {
+		return &FetchError{Reason: "bad_url", Err: fmt.Errorf("port %s is not allowed", port)}
+	}
+	_, err := f.resolve(ctx, u.Hostname())
+	return err
+}
+
+// resolve returns host's addresses, all of them checked by the guard.
+func (f *Fetcher) resolve(ctx context.Context, host string) ([]netip.Addr, error) {
+	var addrs []netip.Addr
+	if ip, err := netip.ParseAddr(host); err == nil {
+		addrs = []netip.Addr{ip}
+	} else {
+		addrs, err = f.lookup(ctx, host)
+		if err != nil {
+			return nil, &FetchError{Reason: "dns", Err: err}
+		}
+		if len(addrs) == 0 {
+			return nil, &FetchError{Reason: "dns", Err: fmt.Errorf("no addresses for %s", host)}
+		}
+	}
+	if f.blocked != nil {
+		for _, a := range addrs {
+			if f.blocked(a) {
+				return nil, &FetchError{Reason: "blocked_address", Err: fmt.Errorf("%s resolves to a non-public address", host)}
+			}
+		}
+	}
+	return addrs, nil
 }
 
 // agentToken is the product token of the User-Agent ("SiteMomentBot"), the
@@ -163,24 +292,9 @@ func (f *Fetcher) dial(ctx context.Context, d *net.Dialer, network, addr string)
 	if !f.anyPort && port != "80" && port != "443" {
 		return nil, &FetchError{Reason: "bad_url", Err: fmt.Errorf("port %s is not allowed", port)}
 	}
-	var addrs []netip.Addr
-	if ip, err := netip.ParseAddr(host); err == nil {
-		addrs = []netip.Addr{ip}
-	} else {
-		addrs, err = f.lookup(ctx, host)
-		if err != nil {
-			return nil, &FetchError{Reason: "dns", Err: err}
-		}
-		if len(addrs) == 0 {
-			return nil, &FetchError{Reason: "dns", Err: fmt.Errorf("no addresses for %s", host)}
-		}
-	}
-	if f.blocked != nil {
-		for _, a := range addrs {
-			if f.blocked(a) {
-				return nil, &FetchError{Reason: "blocked_address", Err: fmt.Errorf("%s resolves to a non-public address", host)}
-			}
-		}
+	addrs, err := f.resolve(ctx, host)
+	if err != nil {
+		return nil, err
 	}
 	var last error
 	for _, a := range addrs {
@@ -209,7 +323,7 @@ func (f *Fetcher) Get(ctx context.Context, rawURL string) (*Response, error) {
 
 	out := &Response{URL: u}
 	client := &http.Client{
-		Transport: f.transport,
+		Transport: f.rt,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if len(via) > f.cfg.MaxRedirects {
 				return &FetchError{Reason: "redirects", Err: fmt.Errorf("more than %d redirects", f.cfg.MaxRedirects)}
