@@ -26,10 +26,22 @@ type fakeGA struct {
 	err   error
 }
 
-func (f *fakeGA) Report(_ context.Context, token, property string, r google.GAReport) ([]google.GARow, error) {
+func (f *fakeGA) Report(ctx context.Context, token, property string, r google.GAReport) ([]google.GARow, error) {
+	f.mu.Lock()
+	f.calls = append(f.calls, r)
+	f.mu.Unlock()
+	// Real google.GA.Report calls OnPage once per HTTP page; simulate one
+	// page so tests of the Limiter wiring (which hooks OnPage, not the
+	// whole Report) see it exercised.
+	if r.OnPage != nil {
+		release, err := r.OnPage(ctx)
+		if err != nil {
+			return nil, err
+		}
+		defer release()
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.calls = append(f.calls, r)
 	if f.err != nil {
 		return nil, f.err
 	}
@@ -144,6 +156,59 @@ func (l *spyLimiter) Acquire(_ context.Context, key string) (func(), error) {
 	l.keys = append(l.keys, key)
 	l.mu.Unlock()
 	return func() {}, nil
+}
+
+// TestSyncSiteBatchesAFreshSixteenMonthProperty is the regression test for
+// a fresh property's first run: before the recent-window/shared-budget
+// split, 16 months (~487 days) made about 1 (date) + 70 (landing, 7-day
+// chunks) + 17 (channel, 30-day chunks) = ~88-93 requests in one call.
+func TestSyncSiteBatchesAFreshSixteenMonthProperty(t *testing.T) {
+	st, site := setup(t)
+	s := &Syncer{Store: st, Tokens: fakeTokens{}, GA: &fakeGA{}, MaxRequests: 100000,
+		Now: func() time.Time { return time.Date(2026, 11, 10, 20, 0, 0, 0, time.UTC) }}
+
+	res, err := s.SyncSite(ctx, site)
+	if err != nil {
+		t.Fatalf("SyncSite: %v", err)
+	}
+	// date (~6, 90-day chunks) + landing/channel's recent window (4 + 1)
+	// + at most BackfillBatch (20) shared older requests.
+	wantMax := 10 + 4 + 1 + BackfillBatch
+	if res.Requests > wantMax {
+		t.Fatalf("requests = %d, want <= %d (was ~88-93 before the recent-window/shared-budget split)", res.Requests, wantMax)
+	}
+	if res.Remaining == 0 {
+		t.Fatal("a fresh 16-month property finished in one call, want its older history left for later")
+	}
+
+	// The budget is shared, not BackfillBatch for each of landing/channel:
+	// finish the backfill and check neither slice's older-than-recent
+	// history needed more rounds than a shared budget would allow.
+	rounds := 1
+	for res.Remaining > 0 && rounds < 50 {
+		res, err = s.SyncSite(ctx, site)
+		if err != nil {
+			t.Fatalf("SyncSite round %d: %v", rounds, err)
+		}
+		rounds++
+	}
+	if res.Remaining != 0 {
+		t.Fatalf("backfill never finished after %d rounds", rounds)
+	}
+	landingDays, err := st.SyncDays(ctx, site.ID, "ga", "landing")
+	if err != nil {
+		t.Fatal(err)
+	}
+	channelDays, err := st.SyncDays(ctx, site.ID, "ga", "channel")
+	if err != nil {
+		t.Fatal(err)
+	}
+	through := Through(s.Now())
+	from := through.AddDate(0, -16, 0)
+	want := int(through.Sub(from).Hours()/24) + 1
+	if len(landingDays) != want || len(channelDays) != want {
+		t.Fatalf("landing days = %d, channel days = %d, want %d (the whole history)", len(landingDays), len(channelDays), want)
+	}
 }
 
 func TestSyncSiteUsesLimiterPerAccount(t *testing.T) {
